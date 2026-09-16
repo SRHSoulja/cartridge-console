@@ -1,0 +1,21 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+solc_version = "0.8.24"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 1
+via_ir = true
+bytecode_hash = "none"
+cbor_metadata = false
+fs_permissions = [{ access = "read", path = "./" }]
+
+[rpc_endpoints]
+robinhood_testnet = "https://rpc.testnet.chain.robinhood.com"
+
+[invariant]
+runs = 32
+depth = 16
+fail_on_revert = false
+

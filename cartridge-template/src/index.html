@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Developer Cartridge Template</title>
+  <style>
+    body {
+      background: #111;
+      color: #eee;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 80vh;
+    }
+    .card {
+      background: #1e1e1e;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 24px;
+      max-width: 500px;
+      width: 100%;
+    }
+    h1 { font-size: 1.25rem; margin-bottom: 12px; }
+    p { font-size: 0.9rem; color: #aaa; margin-bottom: 16px; }
+    button {
+      background: #0070f3;
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      padding: 8px 16px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    button:hover { background: #005bb5; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Cartridge Developer Skeleton</h1>
+    <p>Targeting Console Runtime V0.</p>
+    <button id="btnConnect">Connect Wallet</button>
+  </div>
+
+  <!-- Runtime Client Library -->
+  <script src="../runtime/cartridge_host_runtime.js"></script>
+  <!-- Cartridge Application Logic -->
+  <script src="main.js"></script>
+</body>
+</html>

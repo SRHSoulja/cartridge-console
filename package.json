@@ -1,0 +1,15 @@
+{
+  "scripts": {
+    "test": "node test/test_cartridge_runtime.js && node test/test_runtime_compatibility.js && node test/test_adversarial_security.js && node test/test_generic_host.js && node test/test_protocol_publishing.js && node test/audit_repository_boundary.js",
+    "test:host": "node test/test_generic_host.js",
+    "test:compat": "node test/test_runtime_compatibility.js",
+    "test:security": "node test/test_adversarial_security.js",
+    "test:publishing": "node test/test_protocol_publishing.js",
+    "test:audit": "node test/audit_repository_boundary.js"
+  },
+  "dependencies": {
+    "js-sha3": "^0.13.0",
+    "playwright": "^1.63.0",
+    "ws": "^8.21.3"
+  }
+}

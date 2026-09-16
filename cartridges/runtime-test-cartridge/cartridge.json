@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "0.1.0",
+  "id": "runtime-test-cartridge",
+  "name": "Runtime Test Cartridge",
+  "version": "0.1.0",
+  "runtime": {
+    "version": "^0.1.0",
+    "transport": "auto"
+  },
+  "entry": "index.html",
+  "chainId": 11155111,
+  "capabilities": {
+    "required": ["evm.read"],
+    "optional": ["wallet.identity", "evm.write", "events.accounts", "events.capabilities"]
+  },
+  "permissions": {
+    "contracts": [
+      {
+        "address": "0x0676129B2bF4B06f04AfC7301617b6cE3BB2405c",
+        "name": "PublicLoot",
+        "writes": false
+      },
+      {
+        "address": "0x7777777777777777777777777777777777777777",
+        "name": "AllowedEcho",
+        "writes": true,
+        "allowedSelectors": ["0x12345678", "0xa9059cbb"],
+        "allowNativeValue": false,
+        "isElevated": false
+      }
+    ]
+  },
+  "integrity": {
+    "contentHash": "0x60d0bde3416316c5eda839cd1d20350a977ea14edaba4480bc5f3e4f8be95194"
+  },
+  "metadata": {
+    "author": "Console Development Team",
+    "description": "Minimal Cartridge V0 reference verifying Console Runtime V0 with zero application coupling"
+  }
+}

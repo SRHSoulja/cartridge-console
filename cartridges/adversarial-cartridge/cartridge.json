@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "0.1.0",
+  "id": "cartridge-0003-adversarial",
+  "name": "Adversarial Test Cartridge",
+  "version": "0.1.0",
+  "runtime": {
+    "version": "^0.1.0",
+    "transport": "bridge"
+  },
+  "entry": "index.html",
+  "chainId": 11155111,
+  "capabilities": {
+    "required": ["evm.read", "evm.write"],
+    "optional": ["wallet.identity", "events.accounts", "events.chain", "events.capabilities"]
+  },
+  "permissions": {
+    "contracts": [
+      {
+        "address": "0xF75323518df7Ce90637e2b93cFd7f7d0627cc205",
+        "name": "OutlawsTarget",
+        "writes": true,
+        "allowedSelectors": ["0x12345678"],
+        "allowNativeValue": false,
+        "isElevated": false
+      }
+    ]
+  },
+  "integrity": {
+    "contentHash": "0x0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "metadata": {
+    "author": "Security Audit Team",
+    "description": "Adversarial Cartridge fixture testing host security boundary enforcement"
+  }
+}

@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cartridge #0003: Adversarial Test Fixture</title>
+  <style>
+    body {
+      background: #140b0b;
+      color: #ffb4b4;
+      font-family: monospace;
+      padding: 16px;
+    }
+    h1 { font-size: 1.1rem; color: #ff6e6e; margin-bottom: 8px; }
+    .test-box {
+      background: #241212;
+      border: 1px solid #4a2121;
+      border-radius: 6px;
+      padding: 12px;
+      margin-top: 12px;
+    }
+    .status-pass { color: #5af78e; }
+    .status-fail { color: #ff5c57; }
+    pre { font-size: 0.75rem; overflow-x: auto; max-height: 250px; }
+  </style>
+</head>
+<body>
+  <h1>⚠️ Cartridge #0003: Adversarial Security Fixture</h1>
+  <p>Tests all host-boundary defense mechanisms: granular policy, elevated asset operations, chain lifecycle, MessagePort isolation, and DoS limits.</p>
+
+  <div class="test-box">
+    <div id="summary">Running adversarial battery...</div>
+    <pre id="logOutput"></pre>
+  </div>
+
+  <script src="../../runtime/cartridge_host_runtime.js"></script>
+  <script>
+    const logBox = document.getElementById('logOutput');
+    function log(msg, pass = true) {
+      logBox.innerHTML += `<div class="${pass ? 'status-pass' : 'status-fail'}">${pass ? '🛡️ PASS (Blocked):' : '🚨 VULNERABILITY:'} ${msg}</div>`;
+    }
+
+    async function runAdversarialBattery() {
+      const { CartridgeHost } = window;
+      log('Starting adversarial probe sequence against Console Runtime host boundary...');
+
+      // 1. Raw Parent / Provider Access Attempt
+      try {
+        const rawParentEth = window.parent && window.parent.ethereum;
+        if (rawParentEth) log('Raw window.parent.ethereum is accessible!', false);
+        else log('Raw window.parent.ethereum is inaccessible (Isolated sandbox)');
+      } catch (e) {
+        log('Raw window.parent.ethereum threw access error (Sandbox enforced)');
+      }
+
+      // 2. Forbidden Contract Target
+      try {
+        await CartridgeHost.writeContract({
+          to: '0x1111111111111111111111111111111111111111',
+          data: '0x12345678'
+        });
+        log('Forbidden contract write was NOT blocked!', false);
+      } catch (e) {
+        if (e.code === 4003) log(`Forbidden contract write blocked with error 4003 (${e.message})`);
+        else log(`Forbidden contract write failed with code ${e.code}: ${e.message}`);
+      }
+
+      // 3. Allowed Contract with Forbidden Selector
+      try {
+        await CartridgeHost.writeContract({
+          to: '0xF75323518df7Ce90637e2b93cFd7f7d0627cc205',
+          data: '0xbad0bad0'
+        });
+        log('Forbidden selector was NOT blocked!', false);
+      } catch (e) {
+        if (e.code === 4003) log(`Forbidden selector blocked with error 4003 (${e.message})`);
+        else log(`Forbidden selector failed with code ${e.code}`);
+      }
+
+      // 4. Elevated Asset Operation (setApprovalForAll)
+      try {
+        await CartridgeHost.writeContract({
+          to: '0xF75323518df7Ce90637e2b93cFd7f7d0627cc205',
+          data: '0xa2224470000000000000000000000000attacker0000000000000000000000000000000000000001'
+        });
+        log('Elevated setApprovalForAll was NOT blocked!', false);
+      } catch (e) {
+        if (e.code === 4003) log(`Elevated setApprovalForAll blocked with error 4003 (${e.message})`);
+        else log(`Elevated call failed with code ${e.code}`);
+      }
+
+      // 5. Unexpected Native Value Transfer
+      try {
+        await CartridgeHost.writeContract({
+          to: '0xF75323518df7Ce90637e2b93cFd7f7d0627cc205',
+          data: '0x12345678',
+          value: '0xde0b6b3a7640000' // 1 ETH
+        });
+        log('Unexpected native value transfer was NOT blocked!', false);
+      } catch (e) {
+        if (e.code === 4003) log(`Unexpected native value transfer blocked with error 4003 (${e.message})`);
+        else log(`Native value call failed with code ${e.code}`);
+      }
+
+      document.getElementById('summary').textContent = 'Adversarial probe sequence completed.';
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      CartridgeHost.initCartridgeHostNegotiation({
+        id: 'cartridge-0003-adversarial',
+        onAttached: () => setTimeout(runAdversarialBattery, 200)
+      });
+    });
+  </script>
+</body>
+</html>

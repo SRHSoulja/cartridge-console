@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Runtime Test Cartridge (V0 Reference)</title>
+  <style>
+    :root {
+      --bg: #0a0c10;
+      --panel: #141922;
+      --border: #262f3d;
+      --text: #e1e4e8;
+      --accent: #2f81f7;
+      --green: #3fb950;
+      --red: #f85149;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", monospace;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      max-width: 720px;
+      margin: 0 auto;
+    }
+    header {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    h1 { font-size: 1.1rem; }
+    .badge {
+      font-size: 0.75rem;
+      padding: 3px 8px;
+      border-radius: 12px;
+      background: #388bfd22;
+      color: var(--accent);
+      border: 1px solid var(--accent);
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .panel h2 { font-size: 0.95rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
+    .controls { display: flex; gap: 8px; flex-wrap: wrap; }
+    button {
+      background: #21262d;
+      color: #c9d1d9;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 8px 14px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    button:hover { background: #30363d; color: #fff; }
+    button.primary { background: #238636; border-color: #2ea043; color: #fff; }
+    button.primary:hover { background: #2ea043; }
+    button.danger { background: #b62324; border-color: #da3633; color: #fff; }
+    button.danger:hover { background: #da3633; }
+    pre {
+      background: #0d1117;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px;
+      font-size: 0.75rem;
+      overflow-x: auto;
+      max-height: 180px;
+      color: #79c0ff;
+    }
+    .info-row { display: flex; justify-content: space-between; font-size: 0.85rem; }
+    .info-val { font-weight: bold; color: #fff; font-family: monospace; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div>
+      <h1>Cartridge #0002: Runtime Test Cartridge</h1>
+      <div style="font-size: 0.8rem; color: #8b949e;">Zero application coupling • Pure Console Runtime consumer</div>
+    </div>
+    <span class="badge" id="rtVersionBadge">Runtime: Loading...</span>
+  </header>
+
+  <div class="panel">
+    <h2>1. Wallet & Identity</h2>
+    <div class="info-row">
+      <span>Connected Address:</span>
+      <span class="info-val" id="valAddress">None</span>
+    </div>
+    <div class="info-row">
+      <span>Active Adapter:</span>
+      <span class="info-val" id="valAdapter">direct</span>
+    </div>
+    <div class="controls">
+      <button id="btnConnect" class="primary">Connect Wallet</button>
+      <button id="btnDisconnect" class="danger">Disconnect</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>2. EVM Operations</h2>
+    <div class="controls">
+      <button id="btnRead">Perform eth_call Read</button>
+      <button id="btnWrite">Perform Allowlisted Write</button>
+      <button id="btnIllegalWrite">Test Unauthorized Write (Security Check)</button>
+    </div>
+    <div class="info-row">
+      <span>Last Op Result:</span>
+      <span class="info-val" id="valOpResult" style="word-break: break-all;">None</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>3. Active Runtime Capabilities</h2>
+    <pre id="preCaps">{}</pre>
+  </div>
+
+  <!-- Include reusable Console Runtime V0 client -->
+  <script src="../../runtime/cartridge_host_runtime.js"></script>
+
+  <script>
+    (function() {
+      const { CartridgeHost } = window;
+
+      const rtVersionBadge = document.getElementById('rtVersionBadge');
+      const valAddress = document.getElementById('valAddress');
+      const valAdapter = document.getElementById('valAdapter');
+      const valOpResult = document.getElementById('valOpResult');
+      const preCaps = document.getElementById('preCaps');
+      const btnConnect = document.getElementById('btnConnect');
+      const btnDisconnect = document.getElementById('btnDisconnect');
+      const btnRead = document.getElementById('btnRead');
+      const btnWrite = document.getElementById('btnWrite');
+      const btnIllegalWrite = document.getElementById('btnIllegalWrite');
+
+      function updateUI() {
+        rtVersionBadge.textContent = 'Runtime v' + (CartridgeHost.version || '0.1.0');
+        const addr = CartridgeHost.getAddress();
+        valAddress.textContent = addr ? (addr.slice(0, 8) + '...' + addr.slice(-6)) : 'None';
+        const caps = CartridgeHost.getCapabilities();
+        valAdapter.textContent = caps.adapter || 'direct';
+        preCaps.textContent = JSON.stringify(caps, null, 2);
+      }
+
+      // Dynamic host event reactions
+      CartridgeHost.on('accountsChanged', (newAddr) => {
+        valOpResult.textContent = 'Event: accountsChanged -> ' + (newAddr || 'null');
+        updateUI();
+      });
+
+      CartridgeHost.on('capabilitiesChanged', () => {
+        updateUI();
+      });
+
+      // Actions
+      btnConnect.addEventListener('click', async () => {
+        try {
+          valOpResult.textContent = 'Connecting...';
+          const addr = await CartridgeHost.connect();
+          valOpResult.textContent = 'Connected: ' + addr;
+          updateUI();
+        } catch (e) {
+          valOpResult.textContent = 'Connect Error: ' + e.message;
+        }
+      });
+
+      btnDisconnect.addEventListener('click', async () => {
+        try {
+          await CartridgeHost.disconnect();
+          valOpResult.textContent = 'Disconnected';
+          updateUI();
+        } catch (e) {
+          valOpResult.textContent = 'Disconnect Error: ' + e.message;
+        }
+      });
+
+      btnRead.addEventListener('click', async () => {
+        try {
+          valOpResult.textContent = 'Reading contract...';
+          // Sample call: Loot contract ownerOf(1) or name()
+          const res = await CartridgeHost.readContract({
+            to: '0x0676129B2bF4B06f04AfC7301617b6cE3BB2405c',
+            data: '0x06fdde03' // name()
+          });
+          valOpResult.textContent = 'Read Result: ' + res;
+        } catch (e) {
+          valOpResult.textContent = 'Read Error: ' + e.message;
+        }
+      });
+
+      btnWrite.addEventListener('click', async () => {
+        try {
+          valOpResult.textContent = 'Sending allowlisted write...';
+          const txHash = await CartridgeHost.writeContract({
+            to: '0x7777777777777777777777777777777777777777',
+            data: '0x12345678'
+          });
+          valOpResult.textContent = 'Tx Hash: ' + txHash;
+        } catch (e) {
+          valOpResult.textContent = 'Write Error: [' + (e.code || 'ERR') + '] ' + e.message;
+        }
+      });
+
+      btnIllegalWrite.addEventListener('click', async () => {
+        try {
+          valOpResult.textContent = 'Sending unauthorized write (expecting 4003 rejection)...';
+          await CartridgeHost.writeContract({
+            to: '0x1111111111111111111111111111111111111111',
+            data: '0x99999999'
+          });
+          valOpResult.textContent = 'UNEXPECTED: Write succeeded!';
+        } catch (e) {
+          valOpResult.textContent = 'Expected Security Rejection: [' + (e.code || 'ERR') + '] ' + e.message;
+        }
+      });
+
+      // Probe Console Host handshake
+      CartridgeHost.initCartridgeHostNegotiation({
+        id: 'runtime-test-cartridge',
+        onAttached: () => updateUI()
+      });
+
+      updateUI();
+    })();
+  </script>
+</body>
+</html>

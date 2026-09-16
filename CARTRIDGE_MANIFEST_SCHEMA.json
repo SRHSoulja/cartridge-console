@@ -1,0 +1,179 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hoodquest.io/schemas/cartridge-manifest-v0.1.json",
+  "title": "CartridgeManifestV0",
+  "description": "Hardened manifest specification for Cartridge V0 running on Console Runtime V0.1",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "id",
+    "name",
+    "version",
+    "runtime",
+    "entry",
+    "chainId"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "enum": ["0.1.0", "1.0.0"],
+      "description": "Version of this manifest schema"
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9-_]+$",
+      "description": "Unique slug identifier for the cartridge"
+    },
+    "name": {
+      "type": "string",
+      "description": "Human-readable cartridge title"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+.*$",
+      "description": "Semantic version of the cartridge"
+    },
+    "runtime": {
+      "type": "object",
+      "required": ["version"],
+      "properties": {
+        "version": {
+          "type": "string",
+          "description": "Target Console Runtime version range (e.g. '0.1.0' or '^0.1')"
+        },
+        "transport": {
+          "type": "string",
+          "enum": ["auto", "direct", "bridge"],
+          "default": "auto"
+        }
+      }
+    },
+    "entry": {
+      "type": "string",
+      "description": "Entrypoint file path or URI relative to cartridge root (e.g. 'index.html' or 'src/main.js')"
+    },
+    "chainId": {
+      "type": "integer",
+      "description": "Required EVM chain ID (e.g. 11155111 for Sepolia, 1 for Mainnet)"
+    },
+    "capabilities": {
+      "type": "object",
+      "description": "Capabilities requested by the cartridge, segregated into required and optional",
+      "properties": {
+        "required": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "wallet.identity",
+              "evm.read",
+              "evm.write",
+              "events.accounts",
+              "events.capabilities",
+              "events.chain"
+            ]
+          },
+          "default": []
+        },
+        "optional": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "wallet.identity",
+              "evm.read",
+              "evm.write",
+              "events.accounts",
+              "events.capabilities",
+              "events.chain"
+            ]
+          },
+          "default": []
+        }
+      }
+    },
+    "permissions": {
+      "type": "object",
+      "description": "Permissions requested from the console host (must be explicitly granted by host/user)",
+      "properties": {
+        "contracts": {
+          "type": "array",
+          "description": "List of target contracts the cartridge requests permission to call or write to",
+          "items": {
+            "type": "object",
+            "required": ["address"],
+            "properties": {
+              "address": {
+                "type": "string",
+                "pattern": "^0x[a-fA-F0-9]{40}$",
+                "description": "Contract address in hex"
+              },
+              "name": {
+                "type": "string",
+                "description": "Human-readable label for the contract"
+              },
+              "chainId": {
+                "type": "integer",
+                "description": "Target chain ID if different from global cartridge chainId"
+              },
+              "writes": {
+                "type": "boolean",
+                "default": false,
+                "description": "Whether this contract requires write (transaction) permissions"
+              },
+              "allowedSelectors": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^0x[a-fA-F0-9]{8}$"
+                },
+                "description": "Explicit 4-byte function selectors authorized for invocation"
+              },
+              "allowNativeValue": {
+                "type": "boolean",
+                "default": false,
+                "description": "Whether native token (e.g. ETH) value transfers are permitted"
+              },
+              "maxValueWei": {
+                "type": "string",
+                "description": "Maximum allowed native token value in wei per call"
+              },
+              "isElevated": {
+                "type": "boolean",
+                "default": false,
+                "description": "Whether this contract rule requests elevated permissions (e.g. asset transfers or approvals)"
+              }
+            }
+          }
+        }
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "description": "Immutable content hashes for verification",
+      "properties": {
+        "contentHash": {
+          "type": "string",
+          "pattern": "^0x[a-fA-F0-9]{64}$",
+          "description": "Keccak256 hash of uncompressed cartridge payload"
+        },
+        "compressedHash": {
+          "type": "string",
+          "pattern": "^0x[a-fA-F0-9]{64}$",
+          "description": "Keccak256 hash of compressed payload"
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "author": { "type": "string" },
+        "description": { "type": "string" },
+        "icon": { "type": "string" },
+        "repository": { "type": "string" },
+        "canonicalUrl": { "type": "string", "format": "uri" }
+      }
+    }
+  },
+  "additionalProperties": true
+}

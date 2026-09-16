@@ -1,0 +1,635 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Console Runtime V0.1 — Universal Cartridge Host</title>
+  <style>
+    :root {
+      --bg-base: #0a0b10;
+      --bg-surface: #12141d;
+      --bg-elevated: #1a1d2b;
+      --bg-border: #262a3d;
+      --primary: #6366f1;
+      --primary-hover: #4f46e5;
+      --accent: #06b6d4;
+      --text-main: #f3f4f6;
+      --text-muted: #9ca3af;
+      --text-dim: #6b7280;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background-color: var(--bg-base);
+      color: var(--text-main);
+      font-family: var(--font-sans);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* Top Navigation / Host Chrome */
+    header {
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--bg-border);
+      padding: 10px 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      z-index: 100;
+      flex-shrink: 0;
+    }
+
+    .brand-section {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-logo {
+      width: 28px;
+      height: 28px;
+      background: linear-gradient(135deg, var(--primary), var(--accent));
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 900;
+      font-size: 14px;
+      color: #fff;
+      box-shadow: 0 0 12px rgba(99, 102, 241, 0.4);
+    }
+
+    .brand-title {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .brand-title span.version-tag {
+      font-size: 10px;
+      font-family: var(--font-mono);
+      background: var(--bg-elevated);
+      border: 1px solid var(--bg-border);
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: var(--accent);
+    }
+
+    /* Cartridge Selector Controls */
+    .cartridge-controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    select.cartridge-select {
+      background: var(--bg-elevated);
+      color: var(--text-main);
+      border: 1px solid var(--bg-border);
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 500;
+      outline: none;
+      cursor: pointer;
+      transition: border-color 0.2s;
+    }
+    select.cartridge-select:focus {
+      border-color: var(--primary);
+    }
+
+    /* Host Status Badges */
+    .status-badge {
+      font-size: 11px;
+      font-family: var(--font-mono);
+      padding: 4px 8px;
+      border-radius: 4px;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: var(--bg-elevated);
+      border: 1px solid var(--bg-border);
+    }
+    .status-badge.verified {
+      border-color: rgba(16, 185, 129, 0.4);
+      color: var(--success);
+    }
+    .status-badge.warning {
+      border-color: rgba(245, 158, 11, 0.4);
+      color: var(--warning);
+    }
+    .status-badge.error {
+      border-color: rgba(239, 68, 68, 0.4);
+      color: var(--danger);
+    }
+
+    /* Wallet & Action Controls */
+    .actions-section {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    button.btn {
+      background: var(--bg-elevated);
+      color: var(--text-main);
+      border: 1px solid var(--bg-border);
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.15s ease;
+    }
+    button.btn:hover {
+      background: var(--bg-border);
+      border-color: #3b4261;
+    }
+    button.btn-primary {
+      background: var(--primary);
+      border-color: var(--primary);
+      color: #fff;
+    }
+    button.btn-primary:hover {
+      background: var(--primary-hover);
+      border-color: var(--primary-hover);
+    }
+    button.btn-active {
+      background: rgba(99, 102, 241, 0.2);
+      border-color: var(--primary);
+      color: #fff;
+    }
+
+    /* Main Console Workspace */
+    main {
+      flex: 1;
+      display: flex;
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* Viewport Area */
+    .viewport-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background: #000;
+      position: relative;
+    }
+
+    iframe#cartridgeFrame {
+      width: 100%;
+      height: 100%;
+      border: none;
+      background: #000;
+      flex: 1;
+    }
+
+    /* Loading / Verification Overlay */
+    .boot-overlay {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(10, 11, 16, 0.94);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      z-index: 50;
+      transition: opacity 0.2s ease;
+    }
+    .boot-overlay.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+    .boot-spinner {
+      width: 42px;
+      height: 42px;
+      border: 3px solid var(--bg-border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .boot-message {
+      font-size: 14px;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+    }
+
+    /* Drawer Sidebar (Permissions & Audit) */
+    aside.drawer {
+      width: 440px;
+      background: var(--bg-surface);
+      border-left: 1px solid var(--bg-border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+      transition: transform 0.2s ease;
+    }
+    aside.drawer.collapsed {
+      display: none;
+    }
+
+    .drawer-header {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--bg-border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .drawer-title {
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+    }
+
+    .drawer-tabs {
+      display: flex;
+      background: var(--bg-elevated);
+      border-bottom: 1px solid var(--bg-border);
+    }
+    .drawer-tab {
+      flex: 1;
+      padding: 8px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      text-align: center;
+      cursor: pointer;
+      color: var(--text-muted);
+      border-bottom: 2px solid transparent;
+    }
+    .drawer-tab.active {
+      color: var(--primary);
+      border-bottom-color: var(--primary);
+      background: rgba(99, 102, 241, 0.05);
+    }
+
+    .drawer-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 16px;
+      font-size: 12px;
+    }
+
+    /* Permissions Inspector Elements */
+    .perm-card {
+      background: var(--bg-elevated);
+      border: 1px solid var(--bg-border);
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+    .perm-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .perm-target {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-main);
+    }
+    .perm-selector-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-top: 6px;
+    }
+    .perm-selector-tag {
+      font-family: var(--font-mono);
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(99, 102, 241, 0.15);
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      color: #a5b4fc;
+    }
+
+    /* Audit Log Stream */
+    .audit-stream {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+    }
+    .audit-entry {
+      padding: 6px 8px;
+      background: var(--bg-elevated);
+      border-left: 3px solid var(--primary);
+      border-radius: 4px;
+      word-break: break-all;
+    }
+    .audit-entry.error {
+      border-left-color: var(--danger);
+      background: rgba(239, 68, 68, 0.08);
+    }
+    .audit-entry.success {
+      border-left-color: var(--success);
+    }
+    .audit-meta {
+      display: flex;
+      justify-content: space-between;
+      color: var(--text-dim);
+      font-size: 10px;
+      margin-bottom: 3px;
+    }
+    .audit-method {
+      font-weight: 700;
+      color: var(--accent);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Host Chrome Header -->
+  <header>
+    <div class="brand-section">
+      <div class="brand-logo">C</div>
+      <div class="brand-title">
+        <span>CONSOLE HOST</span>
+        <span class="version-tag">V0.1</span>
+      </div>
+    </div>
+
+    <!-- Generic Cartridge Selector -->
+    <div class="cartridge-controls">
+      <select id="cartridgeSelector" class="cartridge-select" title="Select Cartridge">
+        <option value="" disabled selected>Loading catalog...</option>
+      </select>
+      <span id="integrityBadge" class="status-badge">Checking...</span>
+      <span id="chainBadge" class="status-badge">Chain: ...</span>
+    </div>
+
+    <!-- Host Actions & Wallet State -->
+    <div class="actions-section">
+      <button id="btnReload" class="btn" title="Reload active cartridge">↻ Reload</button>
+      <button id="btnDrawerToggle" class="btn" title="Toggle Security & Permissions Drawer">🛡️ Host Panel</button>
+      <button id="btnWallet" class="btn btn-primary">Connect Wallet</button>
+    </div>
+  </header>
+
+  <!-- Main Viewport and Drawer -->
+  <main>
+    <div class="viewport-container">
+      <!-- Boot / Verification Overlay -->
+      <div id="bootOverlay" class="boot-overlay">
+        <div class="boot-spinner"></div>
+        <div id="bootMessage" class="boot-message">Resolving cartridge manifest...</div>
+      </div>
+
+      <!-- Sandboxed Cartridge Iframe (Minimal Sandbox) -->
+      <iframe id="cartridgeFrame" sandbox="allow-scripts" title="Sandboxed Cartridge Viewport"></iframe>
+    </div>
+
+    <!-- Host Security, Permissions, and Audit Drawer -->
+    <aside id="hostDrawer" class="drawer">
+      <div class="drawer-header">
+        <div class="drawer-title">Console Security Manager</div>
+        <button id="btnCloseDrawer" class="btn" style="padding: 2px 6px;">✕</button>
+      </div>
+
+      <div class="drawer-tabs">
+        <div id="tabPerms" class="drawer-tab active">Permissions</div>
+        <div id="tabAudit" class="drawer-tab">Audit Log</div>
+        <div id="tabManifest" class="drawer-tab">Manifest</div>
+      </div>
+
+      <div id="drawerContent" class="drawer-content">
+        <!-- Tab 1: Permissions Inspector -->
+        <div id="permsView">
+          <div style="margin-bottom: 12px; color: var(--text-muted);">
+            Enforcing fail-closed policy: <strong style="color: var(--accent);">Target + Selectors + Chain + Value</strong>
+          </div>
+          <div id="policyContainer">Loading policy...</div>
+        </div>
+
+        <!-- Tab 2: Live Audit Stream -->
+        <div id="auditView" style="display: none;">
+          <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+            <span style="color: var(--text-muted);">Live RPC Message Frames</span>
+            <button id="btnClearLog" class="btn" style="padding: 2px 6px; font-size: 10px;">Clear</button>
+          </div>
+          <div id="auditStream" class="audit-stream"></div>
+        </div>
+
+        <!-- Tab 3: Raw Manifest Inspector -->
+        <div id="manifestView" style="display: none;">
+          <pre id="manifestJson" style="font-family: var(--font-mono); font-size: 11px; white-space: pre-wrap; color: #cbd5e1;"></pre>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- Scripts -->
+  <script src="./sha3.min.js"></script>
+  <script src="../runtime/cartridge_host_runtime.js"></script>
+  <script src="./resolver.js"></script>
+  <script src="./host_core.js"></script>
+
+  <script>
+    (function() {
+      // 1. Initialize Resolver & Core Controller
+      const resolver = createDefaultResolver('../cartridges');
+      const hostCore = new GenericHostCore({
+        resolver,
+        keccakFn: (b) => window.keccak256 ? window.keccak256(b) : null
+      });
+
+      // UI Elements
+      const cartridgeSelector = document.getElementById('cartridgeSelector');
+      const integrityBadge = document.getElementById('integrityBadge');
+      const chainBadge = document.getElementById('chainBadge');
+      const bootOverlay = document.getElementById('bootOverlay');
+      const bootMessage = document.getElementById('bootMessage');
+      const btnWallet = document.getElementById('btnWallet');
+      const btnReload = document.getElementById('btnReload');
+      const btnDrawerToggle = document.getElementById('btnDrawerToggle');
+      const btnCloseDrawer = document.getElementById('btnCloseDrawer');
+      const hostDrawer = document.getElementById('hostDrawer');
+      const policyContainer = document.getElementById('policyContainer');
+      const auditStream = document.getElementById('auditStream');
+      const manifestJson = document.getElementById('manifestJson');
+      const btnClearLog = document.getElementById('btnClearLog');
+
+      // Drawer Tabs
+      const tabPerms = document.getElementById('tabPerms');
+      const tabAudit = document.getElementById('tabAudit');
+      const tabManifest = document.getElementById('tabManifest');
+      const permsView = document.getElementById('permsView');
+      const auditView = document.getElementById('auditView');
+      const manifestView = document.getElementById('manifestView');
+
+      function switchTab(activeTab, activeView) {
+        [tabPerms, tabAudit, tabManifest].forEach(t => t.classList.remove('active'));
+        [permsView, auditView, manifestView].forEach(v => v.style.display = 'none');
+        activeTab.classList.add('active');
+        activeView.style.display = 'block';
+      }
+      tabPerms.onclick = () => switchTab(tabPerms, permsView);
+      tabAudit.onclick = () => switchTab(tabAudit, auditView);
+      tabManifest.onclick = () => switchTab(tabManifest, manifestView);
+
+      btnDrawerToggle.onclick = () => hostDrawer.classList.toggle('collapsed');
+      btnCloseDrawer.onclick = () => hostDrawer.classList.add('collapsed');
+      btnClearLog.onclick = () => { auditStream.innerHTML = ''; };
+
+      // 2. Event Subscriptions from HostCore
+      hostCore.on('status', (s) => {
+        if (s.state === 'ready') {
+          bootOverlay.classList.add('hidden');
+          integrityBadge.textContent = s.verified ? '✓ Verified' : 'Unverified';
+          integrityBadge.className = 'status-badge ' + (s.verified ? 'verified' : 'warning');
+        } else if (s.state === 'integrity_failed') {
+          bootMessage.textContent = 'INTEGRITY VERIFICATION FAILED!';
+          integrityBadge.textContent = '✗ Corrupt Hash';
+          integrityBadge.className = 'status-badge error';
+        } else {
+          bootOverlay.classList.remove('hidden');
+          bootMessage.textContent = `${s.state.toUpperCase()}: ${s.cartridgeId || ''}...`;
+        }
+      });
+
+      hostCore.on('chain', (c) => {
+        chainBadge.textContent = `Chain: ${c.chainId}`;
+      });
+
+      hostCore.on('wallet', (w) => {
+        if (w.account) {
+          const short = w.account.substring(0, 6) + '...' + w.account.slice(-4);
+          btnWallet.textContent = `${short} (${w.provider})`;
+          btnWallet.className = 'btn btn-active';
+        } else {
+          btnWallet.textContent = 'Connect Wallet';
+          btnWallet.className = 'btn btn-primary';
+        }
+      });
+
+      hostCore.on('log', (entry) => {
+        const div = document.createElement('div');
+        div.className = 'audit-entry ' + (entry.error ? 'error' : (entry.method === 'evm.write' ? 'success' : ''));
+        const time = entry.time.split('T')[1].slice(0, 8);
+        div.innerHTML = `
+          <div class="audit-meta">
+            <span>[${time}] ${entry.type}</span>
+            <span class="audit-method">${entry.method}</span>
+          </div>
+          <div>${escapeHtml(entry.detail)}</div>
+        `;
+        auditStream.appendChild(div);
+        auditStream.scrollTop = auditStream.scrollHeight;
+      });
+
+      hostCore.on('policy', (p) => {
+        renderPolicyUI(p);
+      });
+
+      function escapeHtml(str) {
+        return String(str || '').replace(/[&<>"']/g, m => ({
+          '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        })[m]);
+      }
+
+      function renderPolicyUI(p) {
+        manifestJson.textContent = JSON.stringify(hostCore.activeManifest, null, 2);
+        const contracts = p.granted.contracts || [];
+        if (contracts.length === 0) {
+          policyContainer.innerHTML = '<em>No write contracts declared.</em>';
+          return;
+        }
+
+        policyContainer.innerHTML = contracts.map(c => `
+          <div class="perm-card">
+            <div class="perm-header">
+              <span class="perm-target">${c.name || 'Contract'}</span>
+              <span class="status-badge ${c.writes ? 'verified' : 'warning'}">
+                ${c.writes ? 'Writes Permitted' : 'Read Only'}
+              </span>
+            </div>
+            <div style="font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); margin-bottom: 6px;">
+              ${c.address}
+            </div>
+            <div>
+              <strong style="font-size: 11px; color: var(--text-muted);">Allowed Selectors:</strong>
+              <div class="perm-selector-list">
+                ${(c.allowedSelectors || []).map(s => `<span class="perm-selector-tag">${s}</span>`).join('')}
+              </div>
+            </div>
+            <div style="margin-top: 6px; font-size: 10px; color: var(--text-dim);">
+              Elevated Ops: <strong style="color: ${c.isElevated ? 'var(--warning)' : 'var(--success)'};">${c.isElevated ? 'ALLOWED' : 'BLOCKED'}</strong> |
+              Native Value: <strong>${c.allowNativeValue ? c.maxValueWei + ' wei' : 'NONE'}</strong>
+            </div>
+          </div>
+        `).join('');
+      }
+
+      btnWallet.onclick = async () => {
+        if (hostCore.activeAccount) {
+          hostCore.disconnectWallet();
+        } else {
+          await hostCore.connectWallet();
+        }
+      };
+
+      btnReload.onclick = () => {
+        if (hostCore.activeCartridge) {
+          hostCore.loadCartridge(hostCore.activeCartridge.id);
+        }
+      };
+
+      // 3. Populate Cartridge Catalog & Handle URL Query Params
+      async function initializeConsole() {
+        chainBadge.textContent = `Chain: ${hostCore.activeChainId}`;
+        const cartridges = await resolver.listCartridges();
+        cartridgeSelector.innerHTML = cartridges.map(c => `
+          <option value="${c.id}">${c.name} (${c.version})</option>
+        `).join('');
+
+        // Read query parameter: ?cartridge=xyz
+        const urlParams = new URLSearchParams(window.location.search);
+        const requestedId = urlParams.get('cartridge') || 'hoodquest';
+
+        cartridgeSelector.value = requestedId;
+        cartridgeSelector.onchange = () => {
+          const selected = cartridgeSelector.value;
+          // Update URL without page reload
+          const newUrl = new URL(window.location);
+          newUrl.searchParams.set('cartridge', selected);
+          window.history.replaceState({}, '', newUrl);
+          hostCore.loadCartridge(selected);
+        };
+
+        // Boot initial cartridge
+        try {
+          await hostCore.loadCartridge(requestedId);
+        } catch (e) {
+          console.error('Failed to load initial cartridge:', e);
+        }
+      }
+
+      window.addEventListener('DOMContentLoaded', initializeConsole);
+    })();
+  </script>
+</body>
+</html>

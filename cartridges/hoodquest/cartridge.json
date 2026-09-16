@@ -1,0 +1,76 @@
+{
+  "schemaVersion": "0.1.0",
+  "id": "hoodquest",
+  "name": "HoodQuest: Sanctuary of the Falcon",
+  "version": "1.0.0",
+  "runtime": {
+    "version": "^0.1.0",
+    "transport": "auto"
+  },
+  "entry": "index.html",
+  "chainId": "0xaa36a7",
+  "capabilities": {
+    "required": ["evm.read"],
+    "optional": [
+      "wallet.identity",
+      "evm.write",
+      "evm.receipt",
+      "events.accounts",
+      "events.chain",
+      "events.capabilities"
+    ]
+  },
+  "permissions": {
+    "contracts": [
+      {
+        "address": "0xF75323518df7Ce90637e2b93cFd7f7d0627cc205",
+        "name": "Outlaws",
+        "writes": true,
+        "allowedSelectors": [
+          "0xf59dfdfb",
+          "0x9dac653f",
+          "0x68d0bb70",
+          "0xfeaf797f",
+          "0xb5c7413d",
+          "0x096dcdd6",
+          "0xc703afe9",
+          "0x3c8f76eb",
+          "0x0119b863",
+          "0xd27f4428",
+          "0x2c354ba0",
+          "0x07583e2f"
+        ],
+        "allowNativeValue": false,
+        "isElevated": false
+      },
+      {
+        "address": "0x0676129B2bF4B06f04AfC7301617b6cE3BB2405c",
+        "name": "Loot",
+        "writes": false,
+        "allowNativeValue": false,
+        "isElevated": false
+      },
+      {
+        "address": "0xC115C51a1bf9DdE7B1eD0861E18CaA27f24C3Be9",
+        "name": "Vault Heist / Raids",
+        "writes": true,
+        "allowedSelectors": [
+          "0x12345678",
+          "0x2b06e98b",
+          "0x30931ebc"
+        ],
+        "allowNativeValue": false,
+        "isElevated": false
+      }
+    ]
+  },
+  "integrity": {
+    "contentHash": "0x8a883ea5b9e8497de85abdd1007af9454d01c49e6594bd1743175de0ea0456c0",
+    "compressedHash": "0xcdd2f3635a20484381a7d0952bc388c8df6d877fedbb1eee4561a9cab79040b5"
+  },
+  "metadata": {
+    "author": "SRHSoulja",
+    "description": "On-chain RPG adventure cartridge featuring pets, combat, raids, and dynamic character rendering",
+    "canonicalUrl": "https://srhsoulja.github.io/hoodquest/"
+  }
+}
