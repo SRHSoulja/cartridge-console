@@ -165,23 +165,27 @@
     throw new TypeError(`JCS: unsupported type: ${typeof value}`);
   }
 
-  // Strict SemVer parser
+  // Strict SemVer 2.0.0 specification regex (disallows leading zeros on numbers)
+  const SEMVER_SPEC_REGEX = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
+
+  // Strict SemVer 2.0.0 parser
   function parseSemVer(versionStr) {
     if (typeof versionStr !== 'string') return null;
     const clean = versionStr.trim().replace(/^v/, '');
-    const match = clean.match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/);
+    const match = clean.match(SEMVER_SPEC_REGEX);
     if (!match) return null;
     return {
       major: parseInt(match[1], 10),
       minor: parseInt(match[2], 10),
       patch: parseInt(match[3], 10),
-      prerelease: match[4] || null
+      prerelease: match[4] || null,
+      build: match[5] || null
     };
   }
 
   function comparePrereleases(preA, preB) {
     if (preA === preB) return 0;
-    if (!preA && preB) return 1; // stable > prerelease
+    if (!preA && preB) return 1; // stable (no prerelease) > prerelease
     if (preA && !preB) return -1; // prerelease < stable
     const partsA = preA.split('.');
     const partsB = preB.split('.');
@@ -197,7 +201,7 @@
       if (aNum && bNum) {
         return parseInt(a, 10) - parseInt(b, 10) > 0 ? 1 : -1;
       }
-      if (aNum && !bNum) return -1; // numeric < non-numeric
+      if (aNum && !bNum) return -1; // numeric identifiers have lower precedence than non-numeric
       if (!aNum && bNum) return 1;
       return a > b ? 1 : -1;
     }
@@ -211,7 +215,7 @@
     return comparePrereleases(v1.prerelease, v2.prerelease);
   }
 
-  // Strict SemVer range satisfaction evaluator with SemVer 2.0.0 prerelease precedence
+  // Console Runtime Compatibility Range Profile (strict subset: =, ^, ~, >, >=, <, <=)
   function satisfiesSemVer(targetVersion, rangeStr) {
     const target = parseSemVer(targetVersion);
     if (!target || typeof rangeStr !== 'string') return false;
@@ -219,7 +223,7 @@
 
     let op = '=';
     let baseStr = cleanRange;
-    if (cleanRange.startsWith('^') || cleanRange.startsWith('~')) {
+    if (cleanRange.startsWith('^') || cleanRange.startsWith('~') || cleanRange.startsWith('=')) {
       op = cleanRange[0];
       baseStr = cleanRange.slice(1);
     } else if (cleanRange.startsWith('>=')) {
@@ -234,23 +238,50 @@
     } else if (cleanRange.startsWith('<')) {
       op = '<';
       baseStr = cleanRange.slice(1);
+    } else if (/^[0-9]/.test(cleanRange)) {
+      op = '=';
+      baseStr = cleanRange;
+    } else {
+      // Unsupported range syntax rejected
+      return false;
     }
 
     const base = parseSemVer(baseStr);
     if (!base) return false;
 
-    // Strict Prerelease Rule:
-    // A prerelease version NEVER satisfies a range unless the range explicitly specified a prerelease on the same major.minor.patch tuple
-    if (target.prerelease && !base.prerelease) {
-      return false;
-    }
-
-    if (target.prerelease && base.prerelease) {
+    // Strict Prerelease Isolation Rule:
+    // A prerelease version NEVER satisfies a range unless the range explicitly specified
+    // a prerelease on the exact same major.minor.patch tuple.
+    if (target.prerelease) {
+      if (!base.prerelease) return false;
       if (target.major !== base.major || target.minor !== base.minor || target.patch !== base.patch) {
         return false;
       }
-      return comparePrereleases(target.prerelease, base.prerelease) >= 0;
+      const cmp = compareSemVer(target, base);
+      if (op === '=') return cmp === 0;
+      if (op === '>=') return cmp >= 0;
+      if (op === '<=') return cmp <= 0;
+      if (op === '>') return cmp > 0;
+      if (op === '<') return cmp < 0;
+      if (op === '^' || op === '~') return cmp >= 0;
+      return false;
     }
+
+    // Target is stable release
+    if (base.prerelease) {
+      if (target.major === base.major && target.minor === base.minor && target.patch === base.patch) {
+        // Stable on same tuple satisfies >=, >, ^, ~ of its prereleases
+        if (op === '>=' || op === '>' || op === '^' || op === '~') return true;
+        return false;
+      }
+    }
+
+    const cmp = compareSemVer(target, base);
+    if (op === '=') return cmp === 0;
+    if (op === '>=') return cmp >= 0;
+    if (op === '<=') return cmp <= 0;
+    if (op === '>') return cmp > 0;
+    if (op === '<') return cmp < 0;
 
     if (op === '^') {
       if (base.major === 0) {
@@ -268,11 +299,7 @@
       return target.major === base.major && target.minor === base.minor && target.patch >= base.patch;
     }
 
-    if (op === '>=') return compareSemVer(target, base) >= 0;
-    if (op === '<=') return compareSemVer(target, base) <= 0;
-    if (op === '>') return compareSemVer(target, base) > 0;
-    if (op === '<') return compareSemVer(target, base) < 0;
-    return compareSemVer(target, base) === 0;
+    return false;
   }
 
   // Parse 20-byte address from 32-byte ABI word
@@ -1486,6 +1513,109 @@
     }
   };
 
+  // Strict Manifest V1 Schema Validator
+  function validateManifestV1(manifest) {
+    if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
+      throw new TypeError('Manifest must be a non-null object');
+    }
+
+    if (manifest.manifestVersion !== '1.0.0') {
+      throw new Error(`Invalid manifestVersion: expected "1.0.0", got "${manifest.manifestVersion}"`);
+    }
+
+    if (typeof manifest.id !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(manifest.id)) {
+      throw new Error(`Invalid id/slug: "${manifest.id}". Must be lowercase alphanumeric with hyphens.`);
+    }
+
+    if (typeof manifest.cartridgeId !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(manifest.cartridgeId)) {
+      throw new Error(`Invalid cartridgeId: "${manifest.cartridgeId}". Must be 32-byte hex string (0x followed by 64 hex characters).`);
+    }
+
+    if (typeof manifest.name !== 'string' || manifest.name.trim().length === 0 || manifest.name.length > 100) {
+      throw new Error('Invalid name: must be non-empty string under 100 characters.');
+    }
+
+    if (typeof manifest.version !== 'string' || !parseSemVer(manifest.version)) {
+      throw new Error(`Invalid version: "${manifest.version}". Must be valid SemVer 2.0.0.`);
+    }
+
+    if (!manifest.runtime || typeof manifest.runtime !== 'object') {
+      throw new Error('Manifest missing required "runtime" object.');
+    }
+    if (typeof manifest.runtime.version !== 'string') {
+      throw new Error('Manifest runtime.version must be a string.');
+    }
+
+    if (!manifest.entry || typeof manifest.entry !== 'object') {
+      throw new Error('Manifest missing required "entry" resource descriptor object.');
+    }
+    if (typeof manifest.entry.path !== 'string') {
+      throw new Error('Manifest entry.path must be a string.');
+    }
+    if (typeof manifest.entry.mediaType !== 'string') {
+      throw new Error('Manifest entry.mediaType must be a string.');
+    }
+    if (typeof manifest.entry.digest !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(manifest.entry.digest)) {
+      throw new Error(`Invalid entry.digest: "${manifest.entry.digest}". Must be 32-byte hex string.`);
+    }
+    if (typeof manifest.entry.size !== 'number' || manifest.entry.size < 0) {
+      throw new Error('Manifest entry.size must be a non-negative number.');
+    }
+
+    if (manifest.entry.encoding && manifest.entry.encoding !== 'identity' && manifest.entry.encoding !== 'deflate') {
+      throw new Error(`Unsupported entry encoding: "${manifest.entry.encoding}". Only "identity" and "deflate" are supported.`);
+    }
+    if (manifest.entry.encoding === 'deflate') {
+      if (!manifest.entry.decodedDigest || !/^0x[0-9a-fA-F]{64}$/.test(manifest.entry.decodedDigest)) {
+        throw new Error('Deflate encoded entry requires 32-byte hex decodedDigest.');
+      }
+      if (typeof manifest.entry.decodedSize !== 'number' || manifest.entry.decodedSize < 0) {
+        throw new Error('Deflate encoded entry requires non-negative decodedSize.');
+      }
+    }
+
+    if (!manifest.permissions || typeof manifest.permissions !== 'object') {
+      throw new Error('Manifest missing required "permissions" object.');
+    }
+    if (!Array.isArray(manifest.permissions.chains) || manifest.permissions.chains.length === 0) {
+      throw new Error('Manifest permissions.chains must be a non-empty array of CAIP-2 chain identifiers.');
+    }
+    const caip2Regex = /^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}$/;
+    for (const chain of manifest.permissions.chains) {
+      if (typeof chain !== 'string' || !caip2Regex.test(chain)) {
+        throw new Error(`Invalid CAIP-2 chain identifier: "${chain}".`);
+      }
+    }
+
+    if (manifest.permissions.contracts) {
+      if (!Array.isArray(manifest.permissions.contracts)) {
+        throw new Error('Manifest permissions.contracts must be an array.');
+      }
+      const addrRegex = /^0x[0-9a-fA-F]{40}$/;
+      const selRegex = /^0x[0-9a-fA-F]{8}$/;
+      for (const contract of manifest.permissions.contracts) {
+        if (!contract || typeof contract !== 'object') {
+          throw new Error('Contract permission rule must be an object.');
+        }
+        if (typeof contract.address !== 'string' || !addrRegex.test(contract.address)) {
+          throw new Error(`Invalid contract address: "${contract.address}".`);
+        }
+        if (contract.allowedSelectors) {
+          if (!Array.isArray(contract.allowedSelectors)) {
+            throw new Error('Contract allowedSelectors must be an array.');
+          }
+          for (const sel of contract.allowedSelectors) {
+            if (typeof sel !== 'string' || !selRegex.test(sel)) {
+              throw new Error(`Invalid selector: "${sel}". Must be 4-byte hex string.`);
+            }
+          }
+        }
+      }
+    }
+
+    return true;
+  }
+
   CartridgeHost.init(new DirectHostAdapter());
 
   return {
@@ -1504,6 +1634,7 @@
     normalizeLog,
     normalizeLogs,
     CartridgeLoader,
-    generateSecureNonce
+    generateSecureNonce,
+    validateManifestV1
   };
 }));

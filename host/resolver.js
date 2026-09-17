@@ -8,20 +8,45 @@
 
 (function(root, factory) {
   if (typeof define === 'function' && define.amd) {
-    define([], factory);
+    define(['../runtime/cartridge_host_runtime.js'], factory);
   } else if (typeof module === 'object' && module.exports) {
-    module.exports = factory();
+    let runtime = {};
+    try { runtime = require('../runtime/cartridge_host_runtime.js'); } catch (_) {}
+    module.exports = factory(runtime);
   } else {
-    const exports = factory();
+    const exports = factory(root);
     root.CartridgeResolver = exports.CartridgeResolver;
     root.LocalCartridgeResolver = exports.LocalCartridgeResolver;
     root.OnchainCartridgeResolver = exports.OnchainCartridgeResolver;
     root.createDefaultResolver = exports.createDefaultResolver;
     root.decodeAbiBytes = exports.decodeAbiBytes;
     root.decodeAbiBytesRaw = exports.decodeAbiBytesRaw;
+    root.decodeChannelRelease = exports.decodeChannelRelease;
     root.decompressDeflate = exports.decompressDeflate;
+    root.RESOURCE_LIMITS = exports.RESOURCE_LIMITS;
   }
-}(typeof self !== 'undefined' ? self : this, function() {
+}(typeof self !== 'undefined' ? self : this, function(runtimeModule = {}) {
+
+  const canonicalizeJson = runtimeModule.canonicalizeJson
+    || (typeof self !== 'undefined' && self.canonicalizeJson)
+    || (typeof window !== 'undefined' && window.canonicalizeJson)
+    || (function(val) {
+      if (typeof require === 'function') {
+        try {
+          return require('../runtime/cartridge_host_runtime.js').canonicalizeJson(val);
+        } catch (_) {}
+      }
+      return JSON.stringify(val);
+    });
+
+  const RESOURCE_LIMITS = {
+    MAX_ENCODED_RESOURCE_BYTES: 5 * 1024 * 1024,   // 5 MB
+    MAX_DECODED_RESOURCE_BYTES: 25 * 1024 * 1024,  // 25 MB
+    MAX_COMPRESSION_RATIO: 50,
+    MAX_CHUNKS_PER_RESOURCE: 1024,
+    MAX_TOTAL_RESOURCES: 512,
+    MAX_TOTAL_DECODED_CARTRIDGE_BYTES: 50 * 1024 * 1024 // 50 MB
+  };
 
   /**
    * Abstract Cartridge Resolver
@@ -104,11 +129,15 @@
       // A. If pre-registered with inline manifest
       if (descriptor && descriptor.manifest) {
         const manifest = descriptor.manifest;
+        const entryObj = typeof manifest.entry === 'object' && manifest.entry !== null ? manifest.entry : null;
+        const entryPath = entryObj ? (entryObj.path || 'index.html') : (manifest.entry || 'index.html');
+        const expectedHash = entryObj?.decodedDigest || entryObj?.digest || manifest.integrity?.contentHash || descriptor.expectedContentHash || null;
+
         const fetchPackageBytes = async () => {
           if (descriptor.rawBytes) {
             return descriptor.rawBytes;
           }
-          const pkgPath = descriptor.packageUri || `${this.basePath}/${normId}/${manifest.entry || 'index.html'}`;
+          const pkgPath = descriptor.packageUri || `${this.basePath}/${normId}/${entryPath}`;
           return await this._fetchText(pkgPath);
         };
 
@@ -118,7 +147,7 @@
           version: manifest.version || descriptor.version || '0.1.0',
           release: descriptor.release || 'latest',
           manifest,
-          expectedContentHash: manifest.integrity?.contentHash || descriptor.expectedContentHash,
+          expectedContentHash: expectedHash,
           runtimeRequirement: manifest.runtime?.version || '^0.1.0',
           fetchPackageBytes
         };
@@ -134,9 +163,12 @@
         throw new Error(`Invalid JSON manifest for cartridge "${normId}": ${e.message}`);
       }
 
+      const entryObj = typeof manifest.entry === 'object' && manifest.entry !== null ? manifest.entry : null;
+      const entryPath = entryObj ? (entryObj.path || 'index.html') : (manifest.entry || 'index.html');
+      const expectedHash = entryObj?.decodedDigest || entryObj?.digest || manifest.integrity?.contentHash || descriptor?.expectedContentHash || null;
+
       const fetchPackageBytes = async () => {
-        const entry = manifest.entry || 'index.html';
-        const pkgUri = descriptor?.packageUri || `${this.basePath}/${normId}/${entry}`;
+        const pkgUri = descriptor?.packageUri || `${this.basePath}/${normId}/${entryPath}`;
         return await this._fetchText(pkgUri);
       };
 
@@ -146,7 +178,7 @@
         version: manifest.version || '0.1.0',
         release: descriptor?.release || 'latest',
         manifest,
-        expectedContentHash: manifest.integrity?.contentHash,
+        expectedContentHash: expectedHash,
         runtimeRequirement: manifest.runtime?.version || '^0.1.0',
         fetchPackageBytes
       };
@@ -250,6 +282,45 @@
   }
 
   /**
+   * Helper to decode (Release release, uint256 releaseIndex) from CartridgeRegistry.getChannelRelease
+   */
+  function decodeChannelRelease(hexStr) {
+    if (!hexStr || hexStr === '0x') return null;
+    const clean = hexStr.startsWith('0x') ? hexStr.slice(2) : hexStr;
+    if (clean.length < 64 * 8) return null;
+    try {
+      const releaseOffset = parseInt(clean.slice(0, 64), 16) * 2;
+      const releaseIndex = parseInt(clean.slice(64, 128), 16);
+      const manifestDigest = '0x' + clean.slice(releaseOffset, releaseOffset + 64);
+      const publisher = '0x' + clean.slice(releaseOffset + 64 + 24, releaseOffset + 128);
+      const publishedAt = parseInt(clean.slice(releaseOffset + 128, releaseOffset + 192), 16);
+      const publishedBlock = parseInt(clean.slice(releaseOffset + 192, releaseOffset + 256), 16);
+      const versionRelOffset = parseInt(clean.slice(releaseOffset + 256, releaseOffset + 320), 16) * 2;
+      const versionOffset = releaseOffset + versionRelOffset;
+      const versionLen = parseInt(clean.slice(versionOffset, versionOffset + 64), 16);
+      const versionHex = clean.slice(versionOffset + 64, versionOffset + 64 + versionLen * 2);
+      let version = '';
+      if (typeof Buffer !== 'undefined') {
+        version = Buffer.from(versionHex, 'hex').toString('utf8');
+      } else {
+        for (let i = 0; i < versionHex.length; i += 2) {
+          version += String.fromCharCode(parseInt(versionHex.substr(i, 2), 16));
+        }
+      }
+      return {
+        manifestDigest: manifestDigest.toLowerCase(),
+        publisher: publisher.toLowerCase(),
+        publishedAt,
+        publishedBlock,
+        version,
+        releaseIndex
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /**
    * Onchain Cartridge Resolver
    * Resolves cartridges from on-chain CartridgeRegistry and ContentStore contracts.
    * Enforces cryptographic integrity of manifest and assembled package chunks.
@@ -345,48 +416,124 @@
         channelKey = '0x' + this.keccakFn(channelName);
       }
 
-      // 1. Query CartridgeRegistry.resolveManifest(bytes32,bytes32) -> bytes32 manifestDigest
+      // 1. Query CartridgeRegistry
+      // First attempt getChannelRelease(bytes32,bytes32) to get release metadata + version
+      // Fallback to resolveManifest(bytes32,bytes32) if getChannelRelease returns empty or fails
+      const getChanRelSel = this._getSelector('getChannelRelease(bytes32,bytes32)');
       const resolveSel = this._getSelector('resolveManifest(bytes32,bytes32)');
       const cleanCartId = cartridgeBytes32.startsWith('0x') ? cartridgeBytes32.slice(2).padStart(64, '0') : cartridgeBytes32.padStart(64, '0');
       const cleanChanKey = channelKey.startsWith('0x') ? channelKey.slice(2).padStart(64, '0') : channelKey.padStart(64, '0');
-      const resolveCalldata = resolveSel + cleanCartId + cleanChanKey;
+      const chanCalldata = cleanCartId + cleanChanKey;
 
-      const manifestDigestHex = await this._ethCall(this.registryAddress, resolveCalldata);
-      if (!manifestDigestHex || manifestDigestHex === '0x' || /^0x0+$/.test(manifestDigestHex)) {
-        throw new Error(`Cartridge "${cartridgeId}" not found or channel "${channelName}" not configured`);
+      let releaseInfo = null;
+      let manifestDigest = null;
+
+      try {
+        const chanRelResultHex = await this._ethCall(this.registryAddress, getChanRelSel + chanCalldata);
+        if (chanRelResultHex && chanRelResultHex !== '0x') {
+          releaseInfo = decodeChannelRelease(chanRelResultHex);
+          if (releaseInfo) {
+            manifestDigest = releaseInfo.manifestDigest;
+          }
+        }
+      } catch (_) {}
+
+      if (!manifestDigest) {
+        const manifestDigestHex = await this._ethCall(this.registryAddress, resolveSel + chanCalldata);
+        if (!manifestDigestHex || manifestDigestHex === '0x' || /^0x0+$/.test(manifestDigestHex)) {
+          throw new Error(`Cartridge "${cartridgeId}" not found or channel "${channelName}" not configured`);
+        }
+        manifestDigest = '0x' + manifestDigestHex.slice(-64).toLowerCase();
       }
-      const manifestDigest = '0x' + manifestDigestHex.slice(-64).toLowerCase();
 
-      // 2. Query ContentStore.read(bytes32 manifestDigest) -> bytes manifestJson
+      // 2. Query ContentStore.read(bytes32 manifestDigest) -> bytes manifest raw bytes
       const readSel = this._getSelector('read(bytes32)');
       const readCalldata = readSel + manifestDigest.slice(2);
       const manifestBytesHex = await this._ethCall(this.storeAddress, readCalldata);
-      const manifestText = decodeAbiBytes(manifestBytesHex);
+      const rawManifestBytes = decodeAbiBytesRaw(manifestBytesHex);
 
-      if (!manifestText) {
+      if (!rawManifestBytes || rawManifestBytes.length === 0) {
         throw new Error(`Manifest bytes could not be retrieved from ContentStore for digest: ${manifestDigest}`);
       }
 
-      // 3. Verify Manifest Integrity
-      const computedManifestDigest = ('0x' + this.keccakFn(manifestText)).toLowerCase();
+      // 3. Hash Manifest Raw Bytes Before Decoding (Fail-Closed)
+      const computedManifestDigest = ('0x' + this.keccakFn(rawManifestBytes)).toLowerCase();
       if (computedManifestDigest !== manifestDigest) {
         throw new Error(`Manifest integrity verification failed! Expected ${manifestDigest}, computed ${computedManifestDigest}`);
       }
 
-      const manifest = JSON.parse(manifestText);
-
-      // Verify Cartridge ID match (enforce canonical ID consistency)
-      const manifestCartridgeId = manifest.cartridgeId || manifest.id;
-      if (manifestCartridgeId) {
-        const normManifestId = manifestCartridgeId.toLowerCase();
-        const matchesHex = cartridgeBytes32 && (normManifestId === cartridgeBytes32.toLowerCase());
-        const matchesName = normId && (normManifestId === normId);
-        if (!matchesHex && !matchesName) {
-          throw new Error(`Cartridge ID mismatch: requested "${cartridgeId}", manifest declared "${manifestCartridgeId}"`);
+      // 4. Strict UTF-8 Decode (fatal: true)
+      let manifestText = '';
+      if (typeof TextDecoder !== 'undefined') {
+        const decoder = new TextDecoder('utf-8', { fatal: true });
+        try {
+          manifestText = decoder.decode(rawManifestBytes);
+        } catch (e) {
+          throw new Error(`Strict UTF-8 decode failed for manifest "${manifestDigest}": ${e.message}`);
+        }
+      } else if (typeof Buffer !== 'undefined') {
+        manifestText = Buffer.from(rawManifestBytes).toString('utf8');
+      } else {
+        for (let i = 0; i < rawManifestBytes.length; i++) {
+          manifestText += String.fromCharCode(rawManifestBytes[i]);
         }
       }
 
-      // 4. Resolve Entry Point & Chunks with Manifest V1 Descriptor Model
+      // 5. Parse JSON
+      let manifest;
+      try {
+        manifest = JSON.parse(manifestText);
+      } catch (e) {
+        throw new Error(`Failed to parse manifest JSON: ${e.message}`);
+      }
+
+      // 6. JCS Canonical Byte Sequence Verification
+      // Canonical UTF-8 byte sequence MUST match raw stored manifest bytes bit-for-bit
+      const canonicalText = canonicalizeJson(manifest);
+      let canonicalBytes;
+      if (typeof TextEncoder !== 'undefined') {
+        canonicalBytes = new TextEncoder().encode(canonicalText);
+      } else if (typeof Buffer !== 'undefined') {
+        canonicalBytes = Buffer.from(canonicalText, 'utf8');
+      } else {
+        canonicalBytes = new Uint8Array(canonicalText.length);
+        for (let i = 0; i < canonicalText.length; i++) {
+          canonicalBytes[i] = canonicalText.charCodeAt(i);
+        }
+      }
+
+      if (canonicalBytes.length !== rawManifestBytes.length) {
+        throw new Error(`Manifest is not canonical RFC 8785 JSON: byte length mismatch (${canonicalBytes.length} != ${rawManifestBytes.length})`);
+      }
+      for (let i = 0; i < canonicalBytes.length; i++) {
+        if (canonicalBytes[i] !== rawManifestBytes[i]) {
+          throw new Error(`Manifest is not canonical RFC 8785 JSON: byte mismatch at offset ${i}`);
+        }
+      }
+
+      // 7. Strict Canonical cartridgeId Binding (32-byte hex, no fallback)
+      if (!manifest.cartridgeId || !/^0x[0-9a-fA-F]{64}$/.test(manifest.cartridgeId)) {
+        throw new Error(`Manifest missing canonical 32-byte cartridgeId hex string`);
+      }
+      if (manifest.cartridgeId.toLowerCase() !== cartridgeBytes32.toLowerCase()) {
+        throw new Error(`Cartridge ID mismatch: requested "${cartridgeBytes32}", manifest declared "${manifest.cartridgeId}"`);
+      }
+
+      // 8. Bind Registry Release Metadata and Manifest Release Metadata
+      if (releaseInfo && releaseInfo.version) {
+        if (manifest.version !== releaseInfo.version) {
+          throw new Error(`Release version mismatch: registry release declares "${releaseInfo.version}", but manifest declares "${manifest.version}"`);
+        }
+      }
+
+      // 9. Pre-Decompression Resource Limits & Entry Descriptor
+      if (manifest.resources) {
+        const resCount = Object.keys(manifest.resources).length;
+        if (resCount > RESOURCE_LIMITS.MAX_TOTAL_RESOURCES) {
+          throw new Error(`Manifest resources count ${resCount} exceeds limit of ${RESOURCE_LIMITS.MAX_TOTAL_RESOURCES}`);
+        }
+      }
+
       const entry = typeof manifest.entry === 'object' && manifest.entry !== null
         ? manifest.entry
         : { path: manifest.entry || 'index.html', mediaType: 'text/html' };
@@ -399,14 +546,31 @@
       const expectedDecodedSize = entry.decodedSize !== undefined ? entry.decodedSize : null;
       const chunks = entry.chunks || (expectedStoredDigest ? [expectedStoredDigest] : []);
 
+      // Check chunk and size bounds before fetching or decompressing
+      if (chunks.length > RESOURCE_LIMITS.MAX_CHUNKS_PER_RESOURCE) {
+        throw new Error(`Resource chunk count ${chunks.length} exceeds limit of ${RESOURCE_LIMITS.MAX_CHUNKS_PER_RESOURCE}`);
+      }
+      if (expectedStoredSize !== null && expectedStoredSize > RESOURCE_LIMITS.MAX_ENCODED_RESOURCE_BYTES) {
+        throw new Error(`Encoded resource size ${expectedStoredSize} exceeds limit of ${RESOURCE_LIMITS.MAX_ENCODED_RESOURCE_BYTES}`);
+      }
+      if (expectedDecodedSize !== null && expectedDecodedSize > RESOURCE_LIMITS.MAX_DECODED_RESOURCE_BYTES) {
+        throw new Error(`Decoded resource size ${expectedDecodedSize} exceeds limit of ${RESOURCE_LIMITS.MAX_DECODED_RESOURCE_BYTES}`);
+      }
+      if (expectedStoredSize !== null && expectedDecodedSize !== null && expectedStoredSize > 0) {
+        const ratio = expectedDecodedSize / expectedStoredSize;
+        if (ratio > RESOURCE_LIMITS.MAX_COMPRESSION_RATIO) {
+          throw new Error(`Compression ratio ${ratio.toFixed(1)} exceeds limit of ${RESOURCE_LIMITS.MAX_COMPRESSION_RATIO}`);
+        }
+      }
+
       // The expectedContentHash presented to host_core for verifying packageBytes
-      // If content is decoded, packageBytes matches decodedDigest, otherwise storedDigest
       const expectedContentHash = expectedDecodedDigest || expectedStoredDigest;
 
       return {
         id: manifest.id || cartridgeId,
         name: manifest.name || cartridgeId,
         version: manifest.version || '1.0.0',
+        release: releaseInfo || { version: manifest.version },
         manifest,
         runtimeRequirement: manifest.runtime?.version || '^0.2.0',
         expectedContentHash,
@@ -458,9 +622,9 @@
             throw new Error(`Unsupported content encoding: ${encoding}`);
           }
 
-          // Return binary Uint8Array or UTF-8 text string based on mediaType
+          // Return binary Uint8Array or UTF-8 text string based on mediaType (no ad-hoc entry.format)
           const isText = mediaType.startsWith('text/') || mediaType === 'application/json' || mediaType === 'application/javascript';
-          if (asRaw || !isText || entry.format === 'binary') {
+          if (asRaw || !isText) {
             return finalBytes;
           }
 
@@ -486,17 +650,17 @@
   function createDefaultResolver(basePath = '../cartridges') {
     const resolver = new LocalCartridgeResolver({ basePath });
 
-    // Pre-register Cartridge #0001 (HoodQuest)
-    resolver.register('hoodquest', {
-      id: 'hoodquest',
-      name: 'HoodQuest: Sanctuary of the Falcon',
+    // Primary Generic Manifest V1 Reference Cartridge
+    resolver.register('reference-cartridge-v1', {
+      id: 'reference-cartridge-v1',
+      name: 'Reference Cartridge V1',
       version: '1.0.0',
-      author: 'SRHSoulja',
-      manifestUri: `${basePath}/hoodquest/cartridge.json`,
-      packageUri: `${basePath}/hoodquest/index.html`
+      author: 'Console Platform Core Team',
+      manifestUri: `${basePath}/reference-cartridge-v1/cartridge.json`,
+      packageUri: `${basePath}/reference-cartridge-v1/index.html`
     });
 
-    // Pre-register Cartridge #0002 (Runtime Test Cartridge)
+    // Legacy V0 Runtime Test Cartridge (for backward compatibility verification)
     resolver.register('runtime-test-cartridge', {
       id: 'runtime-test-cartridge',
       name: 'Runtime Test Cartridge',

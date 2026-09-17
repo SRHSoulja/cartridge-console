@@ -120,22 +120,37 @@ async function runCompatibilityTests() {
     }
   }
 
-  // 1. MANIFEST SCHEMA VALIDATION
+  // 1. MANIFEST SCHEMA VALIDATION (V1 AUTHORITATIVE & V0 LEGACY)
   await test('Cartridge manifest files match schema constraints', async () => {
-    const schema = JSON.parse(fs.readFileSync(path.join(__dirname, '../CARTRIDGE_MANIFEST_SCHEMA.json'), 'utf8'));
-    assert.strictEqual(schema.title, 'CartridgeManifestV0');
+    const v1Schema = JSON.parse(fs.readFileSync(path.join(__dirname, '../schemas/cartridge-manifest-v1.schema.json'), 'utf8'));
+    assert.strictEqual(v1Schema.title, 'CartridgeManifestV1');
 
-    const testCartManifest = JSON.parse(
-      fs.readFileSync(path.join(__dirname, '../cartridges/runtime-test-cartridge/cartridge.json'), 'utf8')
+    const v0Schema = JSON.parse(fs.readFileSync(path.join(__dirname, '../schemas/legacy/cartridge-manifest-v0.schema.json'), 'utf8'));
+    assert.strictEqual(v0Schema.title, 'CartridgeManifestV0');
+
+    // Canonical Manifest V1 Reference Cartridge
+    const refManifest = JSON.parse(
+      fs.readFileSync(path.join(__dirname, '../cartridges/reference-cartridge-v1/cartridge.json'), 'utf8')
     );
-    assert.strictEqual(testCartManifest.id, 'runtime-test-cartridge');
-    assert.strictEqual(testCartManifest.chainId, 11155111);
-    assert.ok(testCartManifest.capabilities.required.includes('evm.read'));
+    assert.strictEqual(refManifest.manifestVersion, '1.0.0');
+    assert.strictEqual(refManifest.id, 'reference-cartridge-v1');
+    assert.ok(refManifest.cartridgeId.startsWith('0x'));
+    assert.deepStrictEqual(refManifest.permissions.chains, ['eip155:11155111']);
 
+    // Canonical Manifest V1 Template
     const templateManifest = JSON.parse(
       fs.readFileSync(path.join(__dirname, '../cartridge-template/cartridge.json'), 'utf8')
     );
-    assert.strictEqual(templateManifest.id, 'my-sample-cartridge');
+    assert.strictEqual(templateManifest.manifestVersion, '1.0.0');
+    assert.strictEqual(templateManifest.id, 'starter-cartridge');
+    assert.ok(templateManifest.cartridgeId.startsWith('0x'));
+
+    // Legacy V0 Cartridge
+    const testCartManifest = JSON.parse(
+      fs.readFileSync(path.join(__dirname, '../cartridges/legacy-v0/runtime-test-cartridge/cartridge.json'), 'utf8')
+    );
+    assert.strictEqual(testCartManifest.id, 'runtime-test-cartridge');
+    assert.strictEqual(testCartManifest.chainId, 11155111);
   });
 
   // 2. ERROR CODES & SEMANTICS

@@ -608,7 +608,7 @@
 
         // Read query parameter: ?cartridge=xyz
         const urlParams = new URLSearchParams(window.location.search);
-        const requestedId = urlParams.get('cartridge') || 'hoodquest';
+        const requestedId = urlParams.get('cartridge') || (cartridges[0] ? cartridges[0].id : 'reference-cartridge-v1');
 
         cartridgeSelector.value = requestedId;
         cartridgeSelector.onchange = () => {

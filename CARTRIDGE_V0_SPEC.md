@@ -1,4 +1,12 @@
-# Cartridge V0.1 Specification (Hardened)
+# Cartridge V0.1 Specification (Historical Archive)
+
+> [!WARNING]
+> **LEGACY SPECIFICATION / NON-AUTHORITATIVE**
+> This document describes the initial prototype Cartridge V0.1 format.
+> For the current, authoritative, normative platform specifications, refer to [`docs/SPEC_INDEX.md`](docs/SPEC_INDEX.md):
+> - **Cartridge Manifest V1**: [`docs/CARTRIDGE_MANIFEST_V1.md`](docs/CARTRIDGE_MANIFEST_V1.md)
+> - **Cartridge Protocol V0.1**: [`docs/CARTRIDGE_PROTOCOL_V0_1.md`](docs/CARTRIDGE_PROTOCOL_V0_1.md)
+> - **Authoritative Schema**: [`schemas/cartridge-manifest-v1.schema.json`](schemas/cartridge-manifest-v1.schema.json)
 
 ## 1. Overview
 

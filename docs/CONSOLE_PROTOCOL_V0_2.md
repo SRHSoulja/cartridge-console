@@ -29,10 +29,10 @@ sequenceDiagram
     participant Host as Console Host (Privileged Shell)
     participant Provider as Web3 / EIP-1193 Provider
 
-    Cartridge->>Host: postMessage('cartridge:init', transfer: [MessagePort])
-    Host->>Host: Verify Origin & Initialize Port Session
-    Host-->>Cartridge: port.postMessage({ type: 'handshake_ack', capabilities, sessionNonce })
-    Cartridge->>Cartridge: Bind BridgeHostAdapter to port
+    Cartridge->>Host: window.parent.postMessage({ type: 'cartridge:handshake' })
+    Host->>Host: Generate CSPRNG nonce & create MessageChannel
+    Host-->>Cartridge: window.postMessage({ type: 'cartridge:handshake:ack', nonce, capabilities }, transfer: [port2])
+    Cartridge->>Cartridge: Bind BridgeHostAdapter to MessagePort
 ```
 
 ### Initial Capabilities Object
@@ -120,7 +120,7 @@ interface LogFilter {
 
 ### Chain Validation Invariant
 
-If the cartridge specifies a `chainId` in its log filter, the host MUST validate that `normalizeChainId(filter.chainId) === host.activeChainId`. If there is a mismatch, the host MUST fail closed with error code `4901` (`ConsoleRuntimeError.chainDisconnected`).
+If the cartridge specifies a `chainId` in its log filter, the host MUST validate that `normalizeChainId(filter.chainId) === host.activeChainId`. If there is a mismatch, the host MUST fail closed with error code `4003` (`ConsoleRuntimeError.policyViolation`).
 
 ### Return Normalization
 

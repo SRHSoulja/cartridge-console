@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reference Cartridge V1</title>
+  <style>
+    body {
+      background-color: #0b0f19;
+      color: #f1f5f9;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      padding: 32px;
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      box-sizing: border-box;
+    }
+    .panel {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 32px;
+      max-width: 580px;
+      width: 100%;
+      box-shadow: 0 10px 25px -5px rgba(0,0,0,0.5);
+    }
+    h1 {
+      font-size: 1.5rem;
+      margin: 0 0 8px 0;
+      color: #38bdf8;
+    }
+    p {
+      color: #94a3b8;
+      font-size: 0.9rem;
+      margin: 0 0 24px 0;
+      line-height: 1.5;
+    }
+    .status-badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      font-size: 0.75rem;
+      font-weight: bold;
+      background: #064e3b;
+      color: #34d399;
+      margin-bottom: 20px;
+    }
+    .controls {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    button {
+      background: #2563eb;
+      color: #ffffff;
+      border: none;
+      border-radius: 6px;
+      padding: 10px 18px;
+      font-size: 0.875rem;
+      font-weight: 600;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.2s;
+    }
+    button:hover {
+      background: #1d4ed8;
+    }
+    .console-log {
+      margin-top: 24px;
+      background: #0f172a;
+      border: 1px solid #1e293b;
+      border-radius: 6px;
+      padding: 12px;
+      font-size: 0.8rem;
+      color: #a5b4fc;
+      max-height: 150px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <div class="panel">
+    <div class="status-badge">MANIFEST V1 COMPLIANT</div>
+    <h1>Console Reference Cartridge V1</h1>
+    <p>Canonical generic reference cartridge targeting Console Runtime V0.2. Fully isolated execution environment with zero application-specific coupling.</p>
+
+    <div class="controls">
+      <button id="btnConnect">Connect Wallet</button>
+      <button id="btnRead">Read Contract (Oracle)</button>
+      <button id="btnWrite">Execute Write (Echo 0x12345678)</button>
+    </div>
+
+    <div class="console-log" id="logBox">Reference cartridge loaded. Waiting for host handshake...</div>
+  </div>
+
+  <script>
+    const logBox = document.getElementById('logBox');
+    function log(msg) {
+      logBox.textContent = `[${new Date().toISOString().slice(11, 19)}] ${msg}\n` + logBox.textContent;
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      const host = window.CartridgeHost || (window.parent && window.parent.CartridgeHost);
+      if (!host) {
+        log('Error: CartridgeHost client library not detected.');
+        return;
+      }
+      log('CartridgeHost attached. Ready for interaction.');
+
+      document.getElementById('btnConnect').onclick = async () => {
+        try {
+          const acc = await host.connect();
+          log(`Wallet connected: ${acc}`);
+        } catch (e) {
+          log(`Connect failed: ${e.message}`);
+        }
+      };
+
+      document.getElementById('btnRead').onclick = async () => {
+        try {
+          const res = await host.readContract({
+            to: '0x8888888888888888888888888888888888888888',
+            data: '0x12345678'
+          });
+          log(`Read result: ${res}`);
+        } catch (e) {
+          log(`Read failed: ${e.message}`);
+        }
+      };
+
+      document.getElementById('btnWrite').onclick = async () => {
+        try {
+          const tx = await host.writeContract({
+            to: '0x7777777777777777777777777777777777777777',
+            data: '0x12345678'
+          });
+          log(`Write txHash: ${tx}`);
+        } catch (e) {
+          log(`Write failed: ${e.message}`);
+        }
+      };
+    });
+  </script>
+</body>
+</html>

@@ -114,6 +114,25 @@ function runAudit() {
   assert.ok(agentsContent.includes('marks-targets'), 'AGENTS.md must explicitly boundary marks-targets');
   console.log('  ✅ PASS: AGENTS.md repository boundary specification verified.');
 
+  // Verify Zero HoodQuest application coupling in production code & default fixtures
+  assert.strictEqual(fs.existsSync(path.join(ROOT_DIR, 'cartridges/hoodquest')), false, 'cartridges/hoodquest must not exist in Console repository HEAD');
+  const resolverSource = fs.readFileSync(path.join(ROOT_DIR, 'host/resolver.js'), 'utf8');
+  assert.strictEqual(resolverSource.includes("'hoodquest'"), false, 'createDefaultResolver must not contain hoodquest registration');
+  assert.strictEqual(resolverSource.includes('"hoodquest"'), false, 'createDefaultResolver must not contain hoodquest registration');
+
+  const prodDirs = ['src', 'host', 'runtime', 'cartridge-template', 'cartridges/reference-cartridge-v1'];
+  for (const dir of prodDirs) {
+    const fullDir = path.join(ROOT_DIR, dir);
+    const prodFiles = scanDirectory(fullDir);
+    for (const f of prodFiles) {
+      const code = fs.readFileSync(f, 'utf8');
+      assert.ok(!code.includes('0xF75323518df7Ce90637e2b93cFd7f7d0627cc205'), `Production file ${f} must not contain HoodQuest Outlaws contract address`);
+      assert.ok(!code.includes('0x0676129B2bF4B06f04AfC7301617b6cE3BB2405c'), `Production file ${f} must not contain HoodQuest Loot contract address`);
+      assert.ok(!code.includes('0xC115C51a1bf9DdE7B1eD0861E18CaA27f24C3Be9'), `Production file ${f} must not contain HoodQuest Raids contract address`);
+    }
+  }
+  console.log('  ✅ PASS: Production code and default fixtures verified to contain zero HoodQuest coupling.');
+
   console.log('\n=============================================================');
   console.log('Repository Boundary Audit: ALL CHECKS PASSED');
   console.log('=============================================================\n');

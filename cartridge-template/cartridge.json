@@ -1,31 +1,43 @@
 {
-  "schemaVersion": "0.1.0",
-  "id": "my-sample-cartridge",
-  "name": "My Sample Cartridge",
-  "version": "0.1.0",
+  "manifestVersion": "1.0.0",
+  "id": "starter-cartridge",
+  "cartridgeId": "0x0000000000000000000000000000000000000000000000000000000000000001",
+  "name": "Starter Cartridge",
+  "version": "1.0.0",
+  "description": "Generic starter developer template for Console Platform",
   "runtime": {
-    "version": "^0.1.0",
+    "version": "^0.2.0",
     "transport": "auto"
   },
-  "entry": "src/index.html",
-  "chainId": 11155111,
-  "capabilities": {
-    "required": ["evm.read"],
-    "optional": ["wallet.identity", "evm.write", "events.accounts", "events.capabilities"]
+  "entry": {
+    "path": "src/index.html",
+    "mediaType": "text/html",
+    "encoding": "identity",
+    "digest": "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "size": 1376
   },
+  "resources": [],
+  "dependencies": [],
   "permissions": {
+    "chains": [
+      "eip155:11155111"
+    ],
     "contracts": [
       {
-        "address": "0x0000000000000000000000000000000000000000",
+        "address": "0x1111111111111111111111111111111111111111",
         "name": "SampleTargetContract",
         "writes": true,
-        "methods": []
+        "allowedSelectors": [
+          "0x12345678"
+        ],
+        "allowNativeValue": false,
+        "maxValueWei": "0",
+        "isElevated": false
       }
     ]
   },
   "metadata": {
-    "author": "Cartridge Developer",
-    "description": "Starter developer template for Console Runtime V0",
-    "canonicalUrl": ""
+    "author": "Console Developer",
+    "license": "MIT"
   }
 }

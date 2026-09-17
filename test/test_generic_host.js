@@ -60,18 +60,18 @@ async function runGenericHostTestSuite() {
   const keccakFn = (b) => keccak256(b);
 
   // --- 1. LOCAL CARTRIDGE RESOLVER TESTS ---
-  await test('Resolver: Resolves both HoodQuest and Runtime Test Cartridge manifests & packages', async () => {
+  await test('Resolver: Resolves both Reference Cartridge V1 and Runtime Test Cartridge manifests & packages', async () => {
     const list = await resolver.listCartridges();
     assert.strictEqual(list.length >= 2, true);
-    assert.ok(list.some(c => c.id === 'hoodquest'));
+    assert.ok(list.some(c => c.id === 'reference-cartridge-v1'));
     assert.ok(list.some(c => c.id === 'runtime-test-cartridge'));
 
-    // Resolve HoodQuest
-    const hq = await resolver.resolve('hoodquest');
-    assert.strictEqual(hq.id, 'hoodquest');
-    assert.strictEqual(hq.name, 'HoodQuest: Sanctuary of the Falcon');
-    assert.strictEqual(hq.expectedContentHash, '0x8a883ea5b9e8497de85abdd1007af9454d01c49e6594bd1743175de0ea0456c0');
-    assert.strictEqual(typeof hq.fetchPackageBytes, 'function');
+    // Resolve Reference Cartridge V1
+    const ref = await resolver.resolve('reference-cartridge-v1');
+    assert.strictEqual(ref.id, 'reference-cartridge-v1');
+    assert.strictEqual(ref.name, 'Reference Cartridge V1');
+    assert.strictEqual(ref.expectedContentHash, '0x865443ba96f988fc3d0adc3e0c4109c7fed347c9e8ff81cd57b857c557818d9f');
+    assert.strictEqual(typeof ref.fetchPackageBytes, 'function');
 
     // Resolve Runtime Test Cartridge
     const testCart = await resolver.resolve('runtime-test-cartridge');
@@ -317,7 +317,7 @@ async function runGenericHostTestSuite() {
   });
 
   // --- 5. TWO-CARTRIDGE HOSTING PROOF (CARTRIDGE #0001 & #0002) ---
-  await test('Two-Cartridge Proof: Host loads Cartridge #0001 and #0002 sequentially through exact same path', async () => {
+  await test('Two-Cartridge Proof: Host loads Reference Cartridge V1 and Runtime Test Cartridge sequentially through exact same path', async () => {
     const host = new GenericHostCore({
       resolver,
       keccakFn,
@@ -326,35 +326,35 @@ async function runGenericHostTestSuite() {
       mockMode: true
     });
 
-    // 1. Boot Cartridge #0001 (HoodQuest) with explicit write grant for Outlaws contract
-    const hqBoot = await host.loadCartridge('hoodquest', {
-      ['0xF75323518df7Ce90637e2b93cFd7f7d0627cc205'.toLowerCase()]: {
+    // 1. Boot Primary Generic Reference Cartridge V1 with explicit write grant
+    const refBoot = await host.loadCartridge('reference-cartridge-v1', {
+      ['0x7777777777777777777777777777777777777777'.toLowerCase()]: {
         writes: true,
-        allowedSelectors: ['0xf59dfdfb']
+        allowedSelectors: ['0x12345678']
       }
     });
-    assert.strictEqual(hqBoot.id, 'hoodquest');
-    assert.strictEqual(hqBoot.name, 'HoodQuest: Sanctuary of the Falcon');
-    assert.strictEqual(hqBoot.verified, true);
+    assert.strictEqual(refBoot.id, 'reference-cartridge-v1');
+    assert.strictEqual(refBoot.name, 'Reference Cartridge V1');
+    assert.strictEqual(refBoot.verified, true);
     assert.strictEqual(host.integrityVerified, true);
-    assert.strictEqual(host.computedHash, '0x8a883ea5b9e8497de85abdd1007af9454d01c49e6594bd1743175de0ea0456c0');
+    assert.strictEqual(host.computedHash, '0x865443ba96f988fc3d0adc3e0c4109c7fed347c9e8ff81cd57b857c557818d9f');
 
-    // Test HoodQuest RPC via Host
-    const { port1: hqPort1, port2: hqPort2 } = new MessageChannel();
-    host.bindPortRpc(hqPort1);
-    const hqBridge = new BridgeHostAdapter(hqPort2);
-    await hqBridge.connect();
+    // Test Reference Cartridge RPC via Host
+    const { port1: refPort1, port2: refPort2 } = new MessageChannel();
+    host.bindPortRpc(refPort1);
+    const refBridge = new BridgeHostAdapter(refPort2);
+    await refBridge.connect();
 
-    const hqWriteOutlaws = await hqBridge.writeContract({
-      to: '0xF75323518df7Ce90637e2b93cFd7f7d0627cc205',
-      data: '0xf59dfdfb' + '00'.repeat(32) // feed(uint256)
+    const refWrite = await refBridge.writeContract({
+      to: '0x7777777777777777777777777777777777777777',
+      data: '0x12345678' + '00'.repeat(32)
     });
-    assert.ok(hqWriteOutlaws.startsWith('0x'));
+    assert.ok(refWrite.startsWith('0x'));
 
-    hqPort1.close();
-    hqPort2.close();
+    refPort1.close();
+    refPort2.close();
 
-    // 2. Switch Host to Cartridge #0002 (Runtime Test Cartridge) without restart
+    // 2. Switch Host to Legacy Cartridge #0002 (Runtime Test Cartridge) without restart
     const testCartBoot = await host.loadCartridge('runtime-test-cartridge', {
       ['0x7777777777777777777777777777777777777777'.toLowerCase()]: {
         writes: true,
@@ -381,6 +381,126 @@ async function runGenericHostTestSuite() {
 
     tcPort1.close();
     tcPort2.close();
+  });
+
+  // --- 6. INVARIANT: PRODUCTION MISSING-HASH FAILS CLOSED VS DEV OPTION ---
+  await test('Integrity: Missing content hash fails closed in production, allowed only via allowUnverifiedDevelopment', async () => {
+    const unhashedResolver = {
+      resolve: async () => ({
+        id: 'unhashed-cartridge',
+        name: 'Unhashed Cartridge',
+        version: '1.0.0',
+        runtimeRequirement: '^0.2.0',
+        expectedContentHash: null,
+        manifest: { permissions: { chains: ['eip155:11155111'], contracts: [] } },
+        fetchPackageBytes: async () => '<html><body>Dev Cartridge</body></html>'
+      })
+    };
+
+    // A. Default / production mode: fail closed
+    const prodHost = new GenericHostCore({ resolver: unhashedResolver, keccakFn });
+    let caughtProd = null;
+    try {
+      await prodHost.loadCartridge('unhashed-cartridge');
+    } catch (e) {
+      caughtProd = e;
+    }
+    assert.ok(caughtProd, 'Missing content hash must fail closed by default');
+    assert.strictEqual(caughtProd.code, 5003);
+    assert.strictEqual(prodHost.integrityVerified, false);
+
+    // B. Explicit allowUnverifiedDevelopment mode: permits boot with verified=false
+    const devHost = new GenericHostCore({
+      resolver: unhashedResolver,
+      keccakFn,
+      allowUnverifiedDevelopment: true
+    });
+    const devBoot = await devHost.loadCartridge('unhashed-cartridge');
+    assert.strictEqual(devBoot.verified, false, 'devBoot.verified must be false');
+    assert.strictEqual(devHost.integrityVerified, false, 'devHost.integrityVerified must be false');
+    assert.strictEqual(devHost.computedHash, 'unverified');
+  });
+
+  // --- 7. INVARIANT: PENDING RECEIPT RETURNS NULL (NOT 4900) ---
+  await test('RPC: Receipt fetch returns null for pending/unmined transactions without throwing 4900', async () => {
+    const pendingHost = new GenericHostCore({
+      receiptHandler: async (txHash) => null
+    });
+
+    const res = await pendingHost.fetchReceipt('0x' + '33'.repeat(32));
+    assert.strictEqual(res, null, 'Pending receipt must return null');
+
+    const rpcRes = await pendingHost.handleRpcMessage({
+      jsonrpc: '2.0',
+      id: 99,
+      method: 'evm.receipt',
+      params: { txHash: '0x' + '33'.repeat(32) }
+    });
+    assert.strictEqual(rpcRes.result, null);
+    assert.strictEqual(rpcRes.error, undefined);
+  });
+
+  // --- 8. INVARIANT: EVM.LOGS BOUNDS VALIDATION ---
+  await test('RPC: evm.logs validates block range limits and mutually exclusive parameters', async () => {
+    const host = new GenericHostCore({ mockMode: true, chainId: SEPOLIA_HEX });
+    host.grantedPolicy = { isChainSupported: true, chainId: SEPOLIA_HEX, contracts: [] };
+
+    // A. Block range > 50000 rejected
+    await assert.rejects(
+      async () => await host.executeGetLogs({ fromBlock: 1, toBlock: 50002 }),
+      (err) => err.code === -32602 && err.message.includes('exceeds maximum allowed range')
+    );
+
+    // B. Mutually exclusive blockHash with fromBlock rejected
+    await assert.rejects(
+      async () => await host.executeGetLogs({ blockHash: '0x' + '11'.repeat(32), fromBlock: 100 }),
+      (err) => err.code === -32602 && err.message.includes('blockHash cannot be specified together with fromBlock')
+    );
+
+    // C. Valid filter passes
+    const validLogs = await host.executeGetLogs({ fromBlock: 100, toBlock: 200 });
+    assert.deepStrictEqual(validLogs, []);
+  });
+
+  // --- 9. INVARIANT: CHAIN SWITCHING & CAPABILITY REPORTING ---
+  await test('Lifecycle: Host chain switching re-evaluates policy and updates fine-grained capabilities', async () => {
+    const host = new GenericHostCore({
+      resolver,
+      keccakFn,
+      account: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
+      chainId: SEPOLIA_HEX,
+      mockMode: true
+    });
+
+    await host.loadCartridge('reference-cartridge-v1', {
+      ['0x7777777777777777777777777777777777777777'.toLowerCase()]: {
+        writes: true,
+        allowedSelectors: ['0x12345678']
+      }
+    });
+
+    // Active on Sepolia: write is authorized
+    let caps = host.getCapabilities();
+    assert.strictEqual(caps.evm.write.authorized, true);
+    assert.strictEqual(caps.contractWrite, true);
+
+    // Switch host to Mainnet (unsupported by reference cartridge permissions.chains = ["eip155:11155111"])
+    host.setChainId(MAINNET_HEX);
+    assert.strictEqual(host.grantedPolicy.isChainSupported, false);
+
+    caps = host.getCapabilities();
+    assert.strictEqual(caps.evm.write.authorized, false, 'Write must be de-authorized when host chain is unsupported');
+    assert.strictEqual(caps.contractWrite, false);
+
+    // evm.write on unsupported chain rejected with policyViolation (4003)
+    const writeRes = await host.handleRpcMessage({
+      jsonrpc: '2.0',
+      id: 101,
+      method: 'evm.write',
+      params: { to: '0x7777777777777777777777777777777777777777', data: '0x12345678' }
+    });
+    assert.ok(writeRes.error);
+    assert.strictEqual(writeRes.error.code, 4003);
   });
 
   // --- 6. AUDIT: ZERO APPLICATION-SPECIFIC LOGIC IN HOST SOURCE ---

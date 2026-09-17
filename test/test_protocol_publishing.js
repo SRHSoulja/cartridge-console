@@ -24,7 +24,8 @@ const {
   parseSemVer,
   satisfiesSemVer,
   generateSecureNonce,
-  CartridgeLoader
+  CartridgeLoader,
+  validateManifestV1
 } = require('../runtime/cartridge_host_runtime.js');
 
 const {
@@ -127,9 +128,14 @@ async function runProtocolPublishingSuite() {
     const packageDigest = ('0x' + keccak256(samplePackage)).toLowerCase();
     mockStore.set(packageDigest, samplePackage);
 
+    const cartridgeId = 'onchain-cart-1';
+    const cartridgeBytes32 = ('0x' + keccak256(cartridgeId)).toLowerCase();
+    const channelKey = ('0x' + keccak256('stable')).toLowerCase();
+
     const manifestObj = {
       manifestVersion: '1.0.0',
       id: 'onchain-cart-1',
+      cartridgeId: cartridgeBytes32,
       name: 'Onchain Test Cartridge',
       version: '1.0.0',
       runtime: { version: '^0.2.0' },
@@ -154,10 +160,6 @@ async function runProtocolPublishingSuite() {
     const canonicalManifest = canonicalizeJson(manifestObj);
     const manifestDigest = ('0x' + keccak256(canonicalManifest)).toLowerCase();
     mockStore.set(manifestDigest, canonicalManifest);
-
-    const cartridgeId = 'onchain-cart-1';
-    const cartridgeBytes32 = ('0x' + keccak256(cartridgeId)).toLowerCase();
-    const channelKey = ('0x' + keccak256('stable')).toLowerCase();
 
     // Map registry entry: (cartridgeBytes32, channelKey) -> manifestDigest
     const regKey = `${cartridgeBytes32}:${channelKey}`.toLowerCase();
@@ -258,18 +260,24 @@ async function runProtocolPublishingSuite() {
   });
 
   // --- 5. END-TO-END INTEGRATION: GENERIC HOST BOOTS ONCHAIN-RESOLVED CARTRIDGE ---
+  // --- 5. END-TO-END INTEGRATION: GENERIC HOST BOOTS ONCHAIN-RESOLVED CARTRIDGE ---
   await test('Integration: GenericHostCore boots and executes cartridge resolved via OnchainCartridgeResolver', async () => {
     const mockRegistry = new Map();
     const mockStore = new Map();
 
-    const appHtml = '<!DOCTYPE html><html><body><div id="game">HoodQuest Onchain</div></body></html>';
+    const appHtml = '<!DOCTYPE html><html><body><div id="game">Generic Reference App</div></body></html>';
     const appDigest = ('0x' + keccak256(appHtml)).toLowerCase();
     mockStore.set(appDigest, appHtml);
 
+    const cartId = 'reference-app-v02';
+    const cartBytes32 = ('0x' + keccak256(cartId)).toLowerCase();
+    const chanKey = ('0x' + keccak256('stable')).toLowerCase();
+
     const manifestObj = {
       manifestVersion: '1.0.0',
-      id: 'hoodquest-v02',
-      name: 'HoodQuest: Sanctuary of the Falcon (Onchain V0.2)',
+      id: 'reference-app-v02',
+      cartridgeId: cartBytes32,
+      name: 'Reference Cartridge App (Onchain V0.2)',
       version: '0.2.0',
       runtime: { version: '^0.2.0' },
       entry: {
@@ -282,10 +290,10 @@ async function runProtocolPublishingSuite() {
         chains: ['eip155:11155111'],
         contracts: [
           {
-            address: '0xF75323518df7Ce90637e2b93cFd7f7d0627cc205',
-            name: 'Outlaws',
+            address: '0x7777777777777777777777777777777777777777',
+            name: 'EchoTarget',
             writes: true,
-            allowedSelectors: ['0xf59dfdfb']
+            allowedSelectors: ['0x12345678']
           }
         ]
       }
@@ -294,10 +302,6 @@ async function runProtocolPublishingSuite() {
     const canonManifest = canonicalizeJson(manifestObj);
     const manifestDigest = ('0x' + keccak256(canonManifest)).toLowerCase();
     mockStore.set(manifestDigest, canonManifest);
-
-    const cartId = 'hoodquest-v02';
-    const cartBytes32 = ('0x' + keccak256(cartId)).toLowerCase();
-    const chanKey = ('0x' + keccak256('stable')).toLowerCase();
     mockRegistry.set(`${cartBytes32}:${chanKey}`, manifestDigest);
 
     const resolver = new OnchainCartridgeResolver({
@@ -318,7 +322,7 @@ async function runProtocolPublishingSuite() {
         return '0x';
       }
     });
-    resolver.registerOnchainCartridge(cartId, { cartridgeBytes32: cartBytes32, name: 'HoodQuest: Sanctuary of the Falcon (Onchain V0.2)' });
+    resolver.registerOnchainCartridge(cartId, { cartridgeBytes32: cartBytes32, name: 'Reference Cartridge App (Onchain V0.2)' });
 
     const host = new GenericHostCore({
       resolver,
@@ -328,15 +332,15 @@ async function runProtocolPublishingSuite() {
       mockMode: true
     });
 
-    // Boot cartridge with explicit write grant for Outlaws
+    // Boot cartridge with explicit write grant for EchoTarget
     const booted = await host.loadCartridge(cartId, {
-      ['0xF75323518df7Ce90637e2b93cFd7f7d0627cc205'.toLowerCase()]: {
+      ['0x7777777777777777777777777777777777777777'.toLowerCase()]: {
         writes: true,
-        allowedSelectors: ['0xf59dfdfb']
+        allowedSelectors: ['0x12345678']
       }
     });
-    assert.strictEqual(booted.id, 'hoodquest-v02');
-    assert.strictEqual(booted.name, 'HoodQuest: Sanctuary of the Falcon (Onchain V0.2)');
+    assert.strictEqual(booted.id, 'reference-app-v02');
+    assert.strictEqual(booted.name, 'Reference Cartridge App (Onchain V0.2)');
     assert.strictEqual(booted.verified, true);
     assert.strictEqual(host.integrityVerified, true);
     assert.strictEqual(host.computedHash, appDigest);
@@ -347,10 +351,10 @@ async function runProtocolPublishingSuite() {
     const bridge = new BridgeHostAdapter(port2);
     await bridge.connect();
 
-    // Outlaws write succeeds
+    // EchoTarget write succeeds
     const tx = await bridge.writeContract({
-      to: '0xF75323518df7Ce90637e2b93cFd7f7d0627cc205',
-      data: '0xf59dfdfb' + '00'.repeat(32)
+      to: '0x7777777777777777777777777777777777777777',
+      data: '0x12345678' + '00'.repeat(32)
     });
     assert.ok(tx.startsWith('0x'));
 
@@ -359,7 +363,7 @@ async function runProtocolPublishingSuite() {
     try {
       await bridge.writeContract({
         to: '0x9999999999999999999999999999999999999999',
-        data: '0xf59dfdfb'
+        data: '0x12345678'
       });
     } catch (e) {
       caughtUnauthorized = e;
@@ -684,6 +688,222 @@ async function runProtocolPublishingSuite() {
     assert.strictEqual(effectivePolicy.contracts[2].maxValueWei, '1000');
     // isElevated is FALSE because manifest did not request it!
     assert.strictEqual(effectivePolicy.contracts[2].isElevated, false, 'isElevated requires BOTH request and grant');
+  });
+
+  // --- 13. AUTHORITATIVE RFC 8785 VECTORS ---
+  await test('JCS: Authoritative RFC 8785 compliance vectors (sorting, numbers, strings, whitespace)', async () => {
+    // A. RFC 8785 Section 3.2.3 Sorting Vector
+    // Lexicographic ordering based on UTF-16 code units
+    const sortingInput = {
+      '\u20ac': 'Euro Sign',
+      '\r': 'Carriage Return',
+      '1': 'One',
+      'b': 'Letter B',
+      'a': 'Letter A'
+    };
+    const sortingExpected = '{"\\r":"Carriage Return","1":"One","a":"Letter A","b":"Letter B","€":"Euro Sign"}';
+    assert.strictEqual(canonicalizeJson(sortingInput), sortingExpected);
+
+    // B. RFC 8785 Numbers Vector: -0 normalized to 0, no exponential for integers
+    const numbersInput = {
+      zero: 0,
+      negZero: -0,
+      integer: 1000000,
+      negative: -42,
+      fraction: 0.125
+    };
+    const numbersExpected = '{"fraction":0.125,"integer":1000000,"negZero":0,"negative":-42,"zero":0}';
+    assert.strictEqual(canonicalizeJson(numbersInput), numbersExpected);
+
+    // C. Rejection of non-finite numbers (NaN, Infinity)
+    assert.throws(() => canonicalizeJson({ val: NaN }), TypeError);
+    assert.throws(() => canonicalizeJson({ val: Infinity }), TypeError);
+
+    // D. Rejection of unpaired Unicode surrogates
+    assert.throws(() => canonicalizeJson({ val: 'test\uD800' }), TypeError); // Lone high surrogate
+    assert.throws(() => canonicalizeJson({ val: 'test\uDC00' }), TypeError); // Lone low surrogate
+  });
+
+  // --- 14. RESOLVER: STRICT CANONICAL BYTE ENFORCEMENT ---
+  await test('Resolver: Rejects non-canonical JSON bytes even when hash matches registry digest', async () => {
+    const localStore = new Map();
+    const localRegistry = new Map();
+
+    const manifestObj = {
+      manifestVersion: '1.0.0',
+      id: 'canonical-check-cartridge',
+      cartridgeId: '0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+      name: 'Canonical Check',
+      version: '1.0.0',
+      runtime: { version: '^0.2.0' },
+      entry: { path: 'index.html', digest: '0x' + '22'.repeat(32), size: 100, mediaType: 'text/html' },
+      permissions: { chains: ['eip155:11155111'], contracts: [] }
+    };
+
+    // Stored with pretty-printed whitespace (NON-CANONICAL!)
+    const nonCanonicalJson = JSON.stringify(manifestObj, null, 2);
+    const mDigest = ('0x' + keccak256(Buffer.from(nonCanonicalJson, 'utf8'))).toLowerCase();
+    localStore.set(mDigest, Buffer.from(nonCanonicalJson, 'utf8'));
+
+    const cartId = manifestObj.cartridgeId;
+    const chanKey = ('0x' + keccak256('stable')).toLowerCase();
+    localRegistry.set(`${cartId}:${chanKey}`, mDigest);
+
+    const resolver = new OnchainCartridgeResolver({
+      registryAddress: '0x1111111111111111111111111111111111111111',
+      storeAddress: '0x2222222222222222222222222222222222222222',
+      callHandler: async ({ to, data }) => {
+        const sel = data.slice(0, 10).toLowerCase();
+        if (sel === '0x06fa0577') return mDigest.slice(2).padStart(64, '0');
+        if (sel === '0x61da1439') {
+          const buf = localStore.get(mDigest);
+          const lenHex = buf.length.toString(16).padStart(64, '0');
+          const padLen = Math.ceil(buf.length / 32) * 32;
+          const paddedBuf = Buffer.alloc(padLen);
+          buf.copy(paddedBuf);
+          return '0x' + (32).toString(16).padStart(64, '0') + lenHex + paddedBuf.toString('hex');
+        }
+        return '0x';
+      }
+    });
+
+    // Hash matches, but byte sequence is non-canonical -> MUST FAIL CLOSED
+    await assert.rejects(
+      async () => await resolver.resolve(cartId),
+      (err) => err.message.includes('not canonical RFC 8785 JSON')
+    );
+  });
+
+  // --- 15. SEMVER 2.0.0 SPECIFICATION & RANGE GRAMMAR MATRIX ---
+  await test('SemVer: Comprehensive grammar matrix (exact, ^, ~, >, >=, <, <=, prereleases, build meta)', async () => {
+    // 1. Exact stable and prerelease
+    assert.strictEqual(satisfiesSemVer('1.2.3', '1.2.3'), true);
+    assert.strictEqual(satisfiesSemVer('1.2.3', '=1.2.3'), true);
+    assert.strictEqual(satisfiesSemVer('1.2.4', '1.2.3'), false);
+    assert.strictEqual(satisfiesSemVer('1.0.0-alpha.1', '1.0.0-alpha.1'), true);
+    assert.strictEqual(satisfiesSemVer('1.0.0-alpha.2', '1.0.0-alpha.1'), false);
+
+    // 2. Caret (^) ranges
+    assert.strictEqual(satisfiesSemVer('1.2.5', '^1.2.3'), true);
+    assert.strictEqual(satisfiesSemVer('1.3.0', '^1.2.3'), true);
+    assert.strictEqual(satisfiesSemVer('2.0.0', '^1.2.3'), false);
+    assert.strictEqual(satisfiesSemVer('0.2.5', '^0.2.0'), true);
+    assert.strictEqual(satisfiesSemVer('0.3.0', '^0.2.0'), false);
+    assert.strictEqual(satisfiesSemVer('0.0.3', '^0.0.3'), true);
+    assert.strictEqual(satisfiesSemVer('0.0.4', '^0.0.3'), false);
+
+    // 3. Tilde (~) ranges
+    assert.strictEqual(satisfiesSemVer('1.2.5', '~1.2.3'), true);
+    assert.strictEqual(satisfiesSemVer('1.3.0', '~1.2.3'), false);
+    assert.strictEqual(satisfiesSemVer('0.2.5', '~0.2.0'), true);
+    assert.strictEqual(satisfiesSemVer('0.3.0', '~0.2.0'), false);
+
+    // 4. Comparison operators (>, >=, <, <=)
+    assert.strictEqual(satisfiesSemVer('1.5.0', '>1.2.0'), true);
+    assert.strictEqual(satisfiesSemVer('1.2.0', '>1.2.0'), false);
+    assert.strictEqual(satisfiesSemVer('1.2.0', '>=1.2.0'), true);
+    assert.strictEqual(satisfiesSemVer('1.1.0', '<1.2.0'), true);
+    assert.strictEqual(satisfiesSemVer('1.2.0', '<1.2.0'), false);
+    assert.strictEqual(satisfiesSemVer('1.2.0', '<=1.2.0'), true);
+
+    // 5. Prerelease precedence ordering & isolation
+    // A prerelease NEVER satisfies a range unless explicitly on the same tuple
+    assert.strictEqual(satisfiesSemVer('1.0.0-alpha.1', '^1.0.0'), false);
+    assert.strictEqual(satisfiesSemVer('1.0.0-beta', '>=1.0.0'), false);
+    // Prerelease ordering on same tuple: alpha < alpha.1 < beta < rc
+    assert.strictEqual(satisfiesSemVer('1.0.0-beta', '>=1.0.0-alpha'), true);
+    assert.strictEqual(satisfiesSemVer('1.0.0-alpha', '>=1.0.0-beta'), false);
+    assert.strictEqual(satisfiesSemVer('1.0.0-alpha.2', '>1.0.0-alpha.1'), true);
+
+    // 6. Numeric prerelease identifiers have lower precedence than non-numeric
+    // 1.0.0-1 < 1.0.0-alpha
+    assert.strictEqual(satisfiesSemVer('1.0.0-alpha', '>1.0.0-1'), true);
+    assert.strictEqual(satisfiesSemVer('1.0.0-1', '<1.0.0-alpha'), true);
+
+    // 7. Invalid leading-zero numeric identifiers in version string
+    assert.strictEqual(parseSemVer('01.0.0'), null);
+    assert.strictEqual(parseSemVer('1.01.0'), null);
+    assert.strictEqual(parseSemVer('1.0.01'), null);
+    assert.strictEqual(parseSemVer('1.0.0-01'), null);
+
+    // 8. Build metadata ignored in precedence comparison
+    assert.strictEqual(satisfiesSemVer('1.0.0+build.123', '=1.0.0'), true);
+    assert.strictEqual(satisfiesSemVer('1.0.0+exp.sha.5114f85', '=1.0.0+diff.build'), true);
+
+    // 9. Unsupported range syntax rejected
+    assert.strictEqual(satisfiesSemVer('1.0.0', '1.x'), false);
+    assert.strictEqual(satisfiesSemVer('1.0.0', '1.0.0 - 2.0.0'), false);
+    assert.strictEqual(satisfiesSemVer('1.0.0', '|| 1.0.0'), false);
+  });
+
+  // --- 16. MANIFEST V1 SCHEMA VALIDATION TEST MATRIX ---
+  await test('Manifest V1: Schema validation enforces required fields and rejects malformed manifests', async () => {
+    const validManifest = {
+      manifestVersion: '1.0.0',
+      id: 'valid-test-cartridge',
+      cartridgeId: '0x' + 'aa'.repeat(32),
+      name: 'Valid Cartridge',
+      version: '1.0.0',
+      runtime: { version: '^0.2.0' },
+      entry: {
+        path: 'index.html',
+        mediaType: 'text/html',
+        digest: '0x' + 'bb'.repeat(32),
+        size: 512
+      },
+      permissions: {
+        chains: ['eip155:11155111'],
+        contracts: [
+          {
+            address: '0x7777777777777777777777777777777777777777',
+            writes: true,
+            allowedSelectors: ['0x12345678']
+          }
+        ]
+      }
+    };
+
+    // A. Valid manifest passes
+    assert.strictEqual(validateManifestV1(validManifest), true);
+
+    // B. Rejects invalid manifestVersion
+    assert.throws(() => validateManifestV1({ ...validManifest, manifestVersion: '0.1.0' }), /Invalid manifestVersion/);
+
+    // C. Rejects missing / invalid cartridgeId
+    assert.throws(() => validateManifestV1({ ...validManifest, cartridgeId: undefined }), /Invalid cartridgeId/);
+    assert.throws(() => validateManifestV1({ ...validManifest, cartridgeId: 'not-a-hex' }), /Invalid cartridgeId/);
+    assert.throws(() => validateManifestV1({ ...validManifest, cartridgeId: '0x1234' }), /Invalid cartridgeId/);
+
+    // D. Rejects invalid slug
+    assert.throws(() => validateManifestV1({ ...validManifest, id: 'UPPER_CASE_SLUG' }), /Invalid id\/slug/);
+
+    // E. Rejects invalid version
+    assert.throws(() => validateManifestV1({ ...validManifest, version: 'invalid-semver' }), /Invalid version/);
+    assert.throws(() => validateManifestV1({ ...validManifest, version: '01.0.0' }), /Invalid version/);
+
+    // F. Rejects missing entry or invalid digest
+    assert.throws(() => validateManifestV1({ ...validManifest, entry: undefined }), /Manifest missing required "entry"/);
+    assert.throws(() => validateManifestV1({ ...validManifest, entry: { ...validManifest.entry, digest: 'bad-digest' } }), /Invalid entry.digest/);
+
+    // G. Rejects non-CAIP-2 chain
+    assert.throws(() => validateManifestV1({ ...validManifest, permissions: { chains: ['11155111'], contracts: [] } }), /Invalid CAIP-2/);
+
+    // H. Rejects invalid contract address / selector
+    assert.throws(() => validateManifestV1({
+      ...validManifest,
+      permissions: {
+        chains: ['eip155:11155111'],
+        contracts: [{ address: 'not-an-evm-address' }]
+      }
+    }), /Invalid contract address/);
+
+    assert.throws(() => validateManifestV1({
+      ...validManifest,
+      permissions: {
+        chains: ['eip155:11155111'],
+        contracts: [{ address: '0x7777777777777777777777777777777777777777', allowedSelectors: ['invalid-sel'] }]
+      }
+    }), /Invalid selector/);
   });
 
   // SUMMARY

@@ -1,4 +1,12 @@
-# Console Runtime V0.1 Specification (Hardened)
+# Console Runtime V0.1 Specification (Historical Archive)
+
+> [!WARNING]
+> **LEGACY SPECIFICATION / NON-AUTHORITATIVE**
+> This document describes the initial prototype Console Runtime V0.1.
+> For the current, authoritative, normative platform specifications, refer to [`docs/SPEC_INDEX.md`](docs/SPEC_INDEX.md):
+> - **Console Protocol V0.2**: [`docs/CONSOLE_PROTOCOL_V0_2.md`](docs/CONSOLE_PROTOCOL_V0_2.md)
+> - **Cartridge Manifest V1**: [`docs/CARTRIDGE_MANIFEST_V1.md`](docs/CARTRIDGE_MANIFEST_V1.md)
+> - **Cartridge Protocol V0.1**: [`docs/CARTRIDGE_PROTOCOL_V0_1.md`](docs/CARTRIDGE_PROTOCOL_V0_1.md)
 
 ## 1. Overview & Trust Model
 

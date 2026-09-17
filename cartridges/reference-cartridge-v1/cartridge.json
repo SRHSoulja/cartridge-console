@@ -1,0 +1,50 @@
+{
+  "manifestVersion": "1.0.0",
+  "id": "reference-cartridge-v1",
+  "cartridgeId": "0x0000000000000000000000000000000000000000000000000000000000000002",
+  "name": "Reference Cartridge V1",
+  "version": "1.0.0",
+  "description": "Canonical generic Manifest V1 reference cartridge for Console Platform V0.2",
+  "runtime": {
+    "version": "^0.2.0",
+    "transport": "auto"
+  },
+  "entry": {
+    "path": "index.html",
+    "mediaType": "text/html",
+    "encoding": "identity",
+    "digest": "0x865443ba96f988fc3d0adc3e0c4109c7fed347c9e8ff81cd57b857c557818d9f",
+    "size": 4078
+  },
+  "resources": [],
+  "dependencies": [],
+  "permissions": {
+    "chains": [
+      "eip155:11155111"
+    ],
+    "contracts": [
+      {
+        "address": "0x7777777777777777777777777777777777777777",
+        "name": "EchoTarget",
+        "writes": true,
+        "allowedSelectors": [
+          "0x12345678",
+          "0xa9059cbb"
+        ],
+        "allowNativeValue": false,
+        "maxValueWei": "0",
+        "isElevated": false
+      },
+      {
+        "address": "0x8888888888888888888888888888888888888888",
+        "name": "ReadOnlyOracle",
+        "writes": false
+      }
+    ]
+  },
+  "metadata": {
+    "author": "Console Platform Core Team",
+    "license": "MIT",
+    "repository": "https://github.com/SRHSoulja/cartridge-console"
+  }
+}

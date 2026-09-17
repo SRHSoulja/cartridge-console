@@ -37,6 +37,13 @@
   const RATE_LIMIT_WINDOW_MS = 1000;
   const MAX_REQUESTS_PER_WINDOW = 25;
 
+  // Log filter resource bounds (EIP-1193 / Console Protocol V0.2)
+  const MAX_BLOCK_RANGE = 50000;
+  const MAX_ADDRESS_COUNT = 100;
+  const MAX_TOPICS_COUNT = 4;
+  const MAX_TOPIC_OR_COUNT = 50;
+  const MAX_LOGS_RETURN_LIMIT = 1000;
+
   class GenericHostCore {
     constructor(options = {}) {
       this.resolver = options.resolver || null;
@@ -45,6 +52,9 @@
       this.activeAccount = options.account || null;
       this.providerName = options.providerName || 'Console Host (Runtime V0.1)';
       this.mockMode = Boolean(options.mockMode);
+      this.mockAccount = options.mockAccount || '0x70997970C51812dc3A010C7d01b50e0d17dc79C8';
+      this.allowUnverifiedDevelopment = Boolean(options.allowUnverifiedDevelopment);
+      this.customPermissions = null;
       this.rpcHandler = options.rpcHandler || null;
       this.logsHandler = options.logsHandler || null;
       this.sendTxHandler = options.sendTxHandler || null;
@@ -114,6 +124,7 @@
 
       // A. Terminate previous session if active
       this.teardownActiveCartridge();
+      this.customPermissions = customPermissions;
 
       // B. Resolve Cartridge via Resolver Interface
       if (!this.resolver) {
@@ -168,8 +179,17 @@
         this.integrityVerified = true;
         this.log('SECURITY', 'INTEGRITY_PASS', `Hash verified: ${this.computedHash}`);
       } else {
-        this.computedHash = 'unhashed';
-        this.integrityVerified = true;
+        if (this.allowUnverifiedDevelopment) {
+          this.computedHash = 'unverified';
+          this.integrityVerified = false;
+          this.log('SECURITY', 'UNVERIFIED_DEV', 'Loading unverified package in allowUnverifiedDevelopment mode', true);
+        } else {
+          this.integrityVerified = false;
+          const err = ConsoleRuntimeError.integrityFailure('missing_content_hash', 'unhashed');
+          this.log('SECURITY', 'INTEGRITY_FAIL', 'Missing expected package content hash in production mode', true);
+          this.emit('status', { state: 'integrity_failed', error: err.message });
+          throw err;
+        }
       }
 
       // F. Evaluate Requested vs Granted Permissions (writes default DENIED)
@@ -178,14 +198,14 @@
         requested: resolved.manifest.permissions,
         granted: this.grantedPolicy
       });
-      this.log('HOST', 'POLICY_INITIALIZED', `Granted policy computed for chain ${this.grantedPolicy.chainId}`);
+      this.log('HOST', 'POLICY_INITIALIZED', `Granted policy computed for chain ${this.grantedPolicy.chainId} (supported: ${this.grantedPolicy.isChainSupported})`);
 
       // G. Mount Sandbox (iframe with minimal sandbox="allow-scripts")
       this.emit('status', { state: 'mounting', cartridgeId });
       this.mountSandbox(bytes);
 
       this.emit('status', {
-        state: 'ready',
+        state: this.integrityVerified ? 'ready' : 'unverified-development',
         cartridgeId,
         name: resolved.name,
         version: resolved.version,
@@ -204,6 +224,8 @@
     /**
      * Translates manifest requested permissions into hardened GrantedContractPolicy.
      * Enforces strict permission subsetting (granted ⊆ requested):
+     * - Manifest V1 permissions.chains (CAIP-2) is authoritative
+     * - If active host chain is outside requested permissions.chains, writes and selectors are denied
      * - A cartridge cannot grant itself permissions it did not request
      * - Host overrides can restrict or revoke, but cannot widen permissions beyond requested
      * - Granted selectors are the strict intersection of requested and host-allowed selectors
@@ -212,7 +234,21 @@
      * - Argument constraints cannot be loosened
      */
     computeGrantedPolicy(manifest, overrides = null) {
-      const targetChain = normalizeChainId(manifest.chainId) || this.activeChainId;
+      // Determine requested chains from Manifest V1 permissions.chains or legacy chainId
+      let supportedChains = [];
+      if (Array.isArray(manifest.permissions?.chains)) {
+        supportedChains = manifest.permissions.chains.map(c => {
+          const match = String(c).match(/^eip155:(\d+)$/i);
+          return match ? normalizeChainId(match[1]) : normalizeChainId(c);
+        }).filter(Boolean);
+      } else if (manifest.chainId) {
+        // Explicit legacy V0 fallback
+        const norm = normalizeChainId(manifest.chainId);
+        if (norm) supportedChains = [norm];
+      }
+
+      // Invariant: active host chain must be included in requested permissions.chains
+      const isChainSupported = supportedChains.length > 0 && supportedChains.includes(this.activeChainId);
       const requestedContracts = manifest.permissions?.contracts || [];
       const hostGrants = overrides || {};
 
@@ -220,8 +256,8 @@
         const address = req.address.toLowerCase();
         const grant = hostGrants[address];
 
-        if (!grant) {
-          // Invariant: writes default to DENIED without explicit host grant
+        if (!isChainSupported || !grant) {
+          // Invariant: writes default to DENIED without explicit host grant or if chain unsupported
           return {
             address,
             name: req.name || address.substring(0, 8),
@@ -271,7 +307,9 @@
       });
 
       return {
-        chainId: targetChain,
+        chainId: this.activeChainId,
+        isChainSupported,
+        supportedChains,
         contracts
       };
     }
@@ -450,7 +488,7 @@
               throw ConsoleRuntimeError.unauthorized('Wallet not connected in host console');
             }
 
-            // B. Chain ID Canonical Check
+            // B. Chain ID Canonical Check & Policy Support Check
             const reqChain = normalizeChainId(chainId) || this.activeChainId;
             if (reqChain !== this.activeChainId) {
               throw ConsoleRuntimeError.policyViolation(`Active host chain is ${this.activeChainId}, but write targeted ${reqChain}`);
@@ -459,6 +497,9 @@
             // C. PolicyEngine Primary & Defense-in-Depth Validation
             if (!this.grantedPolicy) {
               throw ConsoleRuntimeError.policyViolation('No granted policy active on host');
+            }
+            if (!this.grantedPolicy.isChainSupported) {
+              throw ConsoleRuntimeError.policyViolation(`Chain ${this.activeChainId} is not supported by active cartridge permissions`);
             }
             PolicyEngine.evaluate({ chainId: reqChain, target: to, data, value }, this.grantedPolicy);
 
@@ -478,6 +519,9 @@
             const reqChain = normalizeChainId(chainId) || this.activeChainId;
             if (reqChain !== this.activeChainId) {
               throw ConsoleRuntimeError.policyViolation(`Active host chain is ${this.activeChainId}, but logs requested chain ${reqChain}`);
+            }
+            if (this.grantedPolicy && !this.grantedPolicy.isChainSupported) {
+              throw ConsoleRuntimeError.policyViolation(`Chain ${this.activeChainId} is not supported by active cartridge permissions`);
             }
             result = await this.executeGetLogs(filter);
             break;
@@ -574,24 +618,78 @@
       throw ConsoleRuntimeError.unauthorized('No transaction signer available');
     }
 
-    async executeGetLogs(filter = {}) {
+    validateLogFilter(filter) {
       if (typeof filter !== 'object' || filter === null) {
         throw ConsoleRuntimeError.invalidParams('Filter must be an object');
       }
+
+      // BlockHash vs fromBlock/toBlock mutual exclusivity
+      if (filter.blockHash !== undefined && filter.blockHash !== null) {
+        if (filter.fromBlock !== undefined || filter.toBlock !== undefined) {
+          throw ConsoleRuntimeError.invalidParams('blockHash cannot be specified together with fromBlock or toBlock');
+        }
+      } else {
+        const parseBlockNum = (b) => {
+          if (typeof b === 'number') return b;
+          if (typeof b === 'string' && b.startsWith('0x')) return parseInt(b, 16);
+          if (typeof b === 'string' && /^\d+$/.test(b)) return parseInt(b, 10);
+          return null;
+        };
+        const from = parseBlockNum(filter.fromBlock);
+        const to = parseBlockNum(filter.toBlock);
+        if (from !== null && to !== null && to >= from) {
+          const range = to - from;
+          if (range > MAX_BLOCK_RANGE) {
+            throw ConsoleRuntimeError.invalidParams(`Block range ${range} exceeds maximum allowed range of ${MAX_BLOCK_RANGE}`);
+          }
+        }
+      }
+
+      // Address filter shape and count
+      if (filter.address !== undefined && filter.address !== null) {
+        if (Array.isArray(filter.address)) {
+          if (filter.address.length > MAX_ADDRESS_COUNT) {
+            throw ConsoleRuntimeError.invalidParams(`Address filter count ${filter.address.length} exceeds limit of ${MAX_ADDRESS_COUNT}`);
+          }
+        } else if (typeof filter.address !== 'string') {
+          throw ConsoleRuntimeError.invalidParams('Address filter must be a string or array of strings');
+        }
+      }
+
+      // Topics filter shape and count
+      if (filter.topics !== undefined && filter.topics !== null) {
+        if (!Array.isArray(filter.topics)) {
+          throw ConsoleRuntimeError.invalidParams('Topics filter must be an array');
+        }
+        if (filter.topics.length > MAX_TOPICS_COUNT) {
+          throw ConsoleRuntimeError.invalidParams(`Topics count ${filter.topics.length} exceeds limit of ${MAX_TOPICS_COUNT}`);
+        }
+        for (const topicItem of filter.topics) {
+          if (Array.isArray(topicItem)) {
+            if (topicItem.length > MAX_TOPIC_OR_COUNT) {
+              throw ConsoleRuntimeError.invalidParams(`Topic OR array count ${topicItem.length} exceeds limit of ${MAX_TOPIC_OR_COUNT}`);
+            }
+          }
+        }
+      }
+    }
+
+    async executeGetLogs(filter = {}) {
+      this.validateLogFilter(filter);
+
+      let logs = [];
       if (this.logsHandler) {
         const raw = await this.logsHandler(filter);
-        return normalizeLogs(raw || []);
-      }
-      if (typeof window !== 'undefined' && window.ethereum && window.ethereum.request) {
+        logs = normalizeLogs(raw || []);
+      } else if (typeof window !== 'undefined' && window.ethereum && window.ethereum.request) {
         try {
           const res = await window.ethereum.request({
             method: 'eth_getLogs',
             params: [filter]
           });
-          if (Array.isArray(res)) return normalizeLogs(res);
+          if (Array.isArray(res)) logs = normalizeLogs(res);
         } catch (_) {}
-      }
-      if (typeof fetch === 'function' && this.rpcUrl) {
+      } else if (typeof fetch === 'function' && this.rpcUrl) {
         try {
           const resp = await fetch(this.rpcUrl, {
             method: 'POST',
@@ -604,16 +702,21 @@
             })
           });
           const json = await resp.json();
-          if (json && json.result) return normalizeLogs(json.result);
+          if (json && json.result) logs = normalizeLogs(json.result);
           if (json && json.error) throw new Error(json.error.message || 'RPC eth_getLogs error');
         } catch (e) {
           if (!this.mockMode) throw e;
         }
+      } else if (this.mockMode) {
+        logs = [];
+      } else {
+        throw ConsoleRuntimeError.disconnected('RPC eth_getLogs unavailable');
       }
-      if (this.mockMode) {
-        return [];
+
+      if (logs.length > MAX_LOGS_RETURN_LIMIT) {
+        throw ConsoleRuntimeError.invalidParams(`Logs result count ${logs.length} exceeds maximum limit of ${MAX_LOGS_RETURN_LIMIT}`);
       }
-      throw ConsoleRuntimeError.disconnected('RPC eth_getLogs unavailable');
+      return logs;
     }
 
     async fetchReceipt(txHash) {
@@ -632,9 +735,13 @@
               params: [txHash]
             })
           });
-          const json = await resp.json();
-          if (json && json.result) return json.result;
-          if (json && json.error) throw new Error(json.error.message || 'RPC receipt error');
+          if (resp.ok) {
+            const json = await resp.json();
+            if (json) {
+              if (json.error) throw new Error(json.error.message || 'RPC receipt error');
+              if (json.result !== undefined) return json.result; // note: null means transaction pending
+            }
+          }
         } catch (e) {
           if (!this.mockMode) throw e;
         }
@@ -674,6 +781,13 @@
 
     setChainId(newChainId) {
       this.activeChainId = normalizeChainId(newChainId);
+      if (this.activeManifest) {
+        this.grantedPolicy = this.computeGrantedPolicy(this.activeManifest, this.customPermissions);
+        this.emit('policy', {
+          requested: this.activeManifest.permissions,
+          granted: this.grantedPolicy
+        });
+      }
       this.emit('chain', { chainId: this.activeChainId });
       this.broadcastEvent('wallet.chainChanged', { chainId: this.activeChainId });
       this.log('HOST', 'CHAIN_CHANGED', `Active chain switched to ${this.activeChainId}`);
@@ -686,6 +800,12 @@
     }
 
     getCapabilities() {
+      const isChainSupported = this.grantedPolicy ? Boolean(this.grantedPolicy.isChainSupported) : true;
+      const writeTargets = this.grantedPolicy && Array.isArray(this.grantedPolicy.contracts)
+        ? this.grantedPolicy.contracts.filter(c => c.writes && Array.isArray(c.allowedSelectors) && c.allowedSelectors.length > 0)
+        : [];
+      const writeAuthorized = Boolean(this.activeAccount && isChainSupported && writeTargets.length > 0);
+
       return {
         adapter: 'bridge',
         wallet: {
@@ -697,11 +817,15 @@
         evm: {
           chainId: this.activeChainId,
           read: { supported: true, available: true },
-          write: { supported: true, available: !!this.activeAccount, authorized: true }
+          write: {
+            supported: true,
+            available: !!this.activeAccount,
+            authorized: writeAuthorized
+          }
         },
         signing: !!this.activeAccount,
         contractRead: true,
-        contractWrite: !!this.activeAccount,
+        contractWrite: writeAuthorized,
         isSandboxed: true
       };
     }

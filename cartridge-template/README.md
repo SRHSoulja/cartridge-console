@@ -1,6 +1,6 @@
-# Cartridge V0 Developer Template
+# Cartridge Manifest V1 Developer Template
 
-This template provides the starter skeleton for creating an on-chain or web Cartridge targeting **Console Runtime V0**.
+This template provides the canonical starter skeleton for creating an on-chain or web Cartridge targeting **Console Runtime V0.2** with **Manifest V1** specification.
 
 ## Project Structure
 ```text
