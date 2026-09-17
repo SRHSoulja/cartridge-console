@@ -23,7 +23,7 @@ This document records the foundational product, ownership, and protocol boundari
 
 ## 3. Canonical Identity & Publishing Authority
 
-* **Cartridge Identity**: Canonical cartridge identity is defined strictly on-chain by the [`CartridgeRegistry`](file:///home/arson/RH/cartridge-console/src/protocol/CartridgeRegistry.sol) contract via a 256-bit domain-separated identifier (`cartridgeId = keccak256(abi.encode(DOMAIN, publisher, salt))`).
+* **Cartridge Identity**: Canonical cartridge identity is defined strictly on-chain by the [`CartridgeRegistry`](../src/protocol/CartridgeRegistry.sol) contract via a 256-bit domain-separated identifier (`cartridgeId = keccak256(abi.encode(DOMAIN, publisher, salt))`).
 * **Publishing Authority**: Publishing authority is governed strictly by the cartridge owner address within `CartridgeRegistry`, secured with 2-step ownership transfers.
 * **Optional Future Portals**: Future Console NFTs or Cartridge NFTs may exist as canonical collectors' artifacts, portals, or curation tokens, but they must **never** define protocol identity, publishing authority, or mandatory runtime execution rights.
 

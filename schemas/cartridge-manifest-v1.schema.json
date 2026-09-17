@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://cartridge.console/schemas/cartridge-manifest-v1.json",
+  "$id": "https://raw.githubusercontent.com/SRHSoulja/cartridge-console/main/schemas/cartridge-manifest-v1.schema.json",
   "title": "CartridgeManifestV1",
   "description": "Authoritative JSON Schema for Console Platform Cartridge Manifest V1 (RFC 8785 / JCS deterministic serialization)",
   "type": "object",
