@@ -610,6 +610,26 @@
         const urlParams = new URLSearchParams(window.location.search);
         const requestedId = urlParams.get('cartridge') || (cartridges[0] ? cartridges[0].id : 'reference-cartridge-v1');
 
+        // Read Launch Context V1 parameters if present: ?context=... OR ?resource=... & ?route=...
+        let initialContext = null;
+        if (urlParams.has('context')) {
+          try {
+            const raw = urlParams.get('context');
+            initialContext = JSON.parse(raw.startsWith('{') ? raw : atob(raw));
+          } catch (e) {
+            console.warn('Failed to parse launch context query param', e);
+          }
+        } else if (urlParams.has('resource') || urlParams.has('route')) {
+          initialContext = {
+            version: '1',
+            resource: urlParams.get('resource') || undefined,
+            route: urlParams.get('route') || undefined
+          };
+        }
+        if (initialContext) {
+          hostCore.setLaunchContext(initialContext);
+        }
+
         cartridgeSelector.value = requestedId;
         cartridgeSelector.onchange = () => {
           const selected = cartridgeSelector.value;

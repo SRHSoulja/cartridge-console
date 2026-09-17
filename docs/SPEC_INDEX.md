@@ -17,6 +17,7 @@ The following specifications define the active platform architecture. All develo
 | [`CARTRIDGE_REGISTRY_V0_1.md`](CARTRIDGE_REGISTRY_V0_1.md) | **Current (V0.1)** | On-chain CartridgeRegistry contract: identity commitments, immutable releases, and mutable channels. |
 | [`CONTENT_STORE_ARCHITECTURE.md`](CONTENT_STORE_ARCHITECTURE.md) | **Current (V0.1)** | ContentStore chunking, content-addressed deduplication, and cross-cartridge dependency sharing. |
 | [`SECURITY_MODEL.md`](SECURITY_MODEL.md) | **Current** | Threat model, sandboxing, CSPRNG nonces, and defense-in-depth permission boundaries. |
+| [`LAUNCH_CONTEXT_V1.md`](LAUNCH_CONTEXT_V1.md) | **Current (V1.0)** | Launch Context V1: CAIP-19 asset identification, initial presentation routing, resource bounds, and authority isolation. |
 | [`ARCHITECTURE_DECISIONS_V1.md`](ARCHITECTURE_DECISIONS_V1.md) | **Current** | Core architectural decisions, permissionless invariants, ownership boundaries, and deferred scope. |
 
 ---

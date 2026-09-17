@@ -23,7 +23,11 @@ const {
   BridgeHostAdapter,
   DirectHostAdapter,
   ConsoleRuntimeError,
-  PolicyEngine
+  PolicyEngine,
+  parseCaip19,
+  validateLaunchContext,
+  sanitizeLaunchContext,
+  MAX_LAUNCH_CONTEXT_BYTES
 } = require('../runtime/cartridge_host_runtime.js');
 
 const {
@@ -501,6 +505,114 @@ async function runGenericHostTestSuite() {
     });
     assert.ok(writeRes.error);
     assert.strictEqual(writeRes.error.code, 4003);
+  });
+
+  // --- 5B. LAUNCH CONTEXT V1, CAIP-19 VALIDATION, & SECURITY INVARIANTS ---
+  await test('Launch Context V1: Handshake delivery, CAIP-19 validation, and security invariants', async () => {
+    // 1. CAIP-19 Parser Unit Verification
+    const validErc721 = parseCaip19('eip155:4663/erc721:0xdd084caa7973fa07b71c7247236738786e04057a/123');
+    assert.ok(validErc721);
+    assert.strictEqual(validErc721.chainId, 'eip155:4663');
+    assert.strictEqual(validErc721.chainNamespace, 'eip155');
+    assert.strictEqual(validErc721.chainReference, '4663');
+    assert.strictEqual(validErc721.assetNamespace, 'erc721');
+    assert.strictEqual(validErc721.assetReference, '0xdd084caa7973fa07b71c7247236738786e04057a');
+    assert.strictEqual(validErc721.tokenId, '123');
+
+    const validErc20 = parseCaip19('eip155:1/erc20:0x6b175474e89094c44da98b954eedeac495271d0f');
+    assert.ok(validErc20);
+    assert.strictEqual(validErc20.tokenId, null);
+
+    assert.strictEqual(parseCaip19('bad-uri'), null);
+    assert.strictEqual(parseCaip19('eip155:/erc721:0x123/1'), null);
+
+    // 2. Launch Context Validation and Sanitization
+    const validCtx = {
+      version: '1',
+      resource: 'eip155:4663/erc721:0xdd084caa7973fa07b71c7247236738786e04057a/123',
+      route: 'detail',
+      params: { tab: 'stats', active: true }
+    };
+    assert.strictEqual(validateLaunchContext(validCtx), true);
+
+    const sanitized = sanitizeLaunchContext({
+      ...validCtx,
+      untrustedInjection: 'dropMe',
+      isOwner: true
+    });
+    assert.deepStrictEqual(sanitized, validCtx, 'Sanitizer must strip unknown properties');
+
+    // Rejections & Sanitization Fallback
+    assert.strictEqual(sanitizeLaunchContext(null), null);
+    assert.strictEqual(sanitizeLaunchContext({ version: '2' }), null); // Invalid version
+    assert.strictEqual(sanitizeLaunchContext({ version: '1', resource: 'not-caip19' }), null); // Invalid CAIP-19
+    assert.strictEqual(sanitizeLaunchContext({ version: '1', route: 'a'.repeat(65) }), null); // Route too long
+
+    // Oversized context rejected
+    const hugeContext = { version: '1', route: 'test', params: { data: 'x'.repeat(1024) } };
+    assert.strictEqual(sanitizeLaunchContext(hugeContext), null);
+
+    // 3. Handshake Delivery via Host Bridge
+    const hostWithCtx = new GenericHostCore({
+      resolver,
+      keccakFn,
+      account: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
+      chainId: SEPOLIA_HEX,
+      mockMode: true,
+      launchContext: validCtx
+    });
+    await hostWithCtx.loadCartridge('runtime-test-cartridge', {
+      ['0x7777777777777777777777777777777777777777'.toLowerCase()]: {
+        writes: true,
+        allowedSelectors: ['0x12345678']
+      }
+    });
+
+    const { port1, port2 } = new MessageChannel();
+    hostWithCtx.bindPortRpc(port1);
+
+    // Create bridge adapter simulating delivery of handshake ack payload
+    const bridgeWithCtx = new BridgeHostAdapter(port2, hostWithCtx.getCapabilities(), hostWithCtx.getLaunchContext());
+    CartridgeHost.setAdapter(bridgeWithCtx);
+
+    const receivedCtx = CartridgeHost.getLaunchContext();
+    assert.deepStrictEqual(receivedCtx, validCtx, 'CartridgeHost must receive valid Launch Context V1');
+
+    // 4. Backward Compatibility: Boot with no context
+    const hostWithoutCtx = new GenericHostCore({
+      resolver,
+      keccakFn,
+      mockMode: true
+    });
+    assert.strictEqual(hostWithoutCtx.getLaunchContext(), null);
+
+    const channelNoCtx = new MessageChannel();
+    const bridgeWithoutCtx = new BridgeHostAdapter(channelNoCtx.port2, hostWithoutCtx.getCapabilities());
+    assert.strictEqual(bridgeWithoutCtx.getLaunchContext(), null, 'BridgeHostAdapter must cleanly return null when context is absent');
+    channelNoCtx.port1.close();
+    channelNoCtx.port2.close();
+
+    // 5. SECURITY INVARIANT: LAUNCH CONTEXT != AUTHORITY
+    // A. Connected address remains caller's real address (0x7099...), NOT any address derived from context
+    await CartridgeHost.connect();
+    assert.strictEqual(CartridgeHost.getAddress(), '0x70997970C51812dc3A010C7d01b50e0d17dc79C8');
+    assert.notStrictEqual(CartridgeHost.getAddress(), '0xdd084caa7973fa07b71c7247236738786e04057a');
+
+    // B. Context never widens permissions or bypasses firewall (unauthorized writes still fail with 4003)
+    let caughtDisallowed = null;
+    try {
+      await CartridgeHost.writeContract({
+        to: '0xdd084caa7973fa07b71c7247236738786e04057a', // Target from context, but not in manifest permissions!
+        data: '0x12345678'
+      });
+    } catch (e) {
+      caughtDisallowed = e;
+    }
+    assert.ok(caughtDisallowed, 'Launch context must never grant write permission to undeclared contracts');
+    assert.strictEqual(caughtDisallowed.code, 4003);
+
+    port1.close();
+    port2.close();
   });
 
   // --- 6. AUDIT: ZERO APPLICATION-SPECIFIC LOGIC IN HOST SOURCE ---

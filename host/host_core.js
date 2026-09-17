@@ -27,7 +27,11 @@
     normalizeLog,
     normalizeLogs,
     CartridgeLoader,
-    ELEVATED_SELECTORS
+    ELEVATED_SELECTORS,
+    parseCaip19,
+    validateLaunchContext,
+    sanitizeLaunchContext,
+    MAX_LAUNCH_CONTEXT_BYTES
   } = runtimeModule;
 
   const DEFAULT_CHAIN_ID = '0xaa36a7'; // Sepolia (11155111)
@@ -82,6 +86,9 @@
       // Keccak-256 Hash Function delegate
       this.keccakFn = options.keccakFn || (typeof window !== 'undefined' && window.keccak256 ? window.keccak256 : null);
 
+      // Launch Context V1 State
+      this.launchContext = sanitizeLaunchContext(options.launchContext);
+
       // Event listeners for UI
       this.listeners = {
         log: [],
@@ -90,6 +97,15 @@
         chain: [],
         policy: []
       };
+    }
+
+    setLaunchContext(context) {
+      this.launchContext = sanitizeLaunchContext(context);
+      this.log('HOST', 'LAUNCH_CONTEXT_SET', this.launchContext ? `Set launch context: ${this.launchContext.resource || this.launchContext.route || 'custom'}` : 'Cleared launch context');
+    }
+
+    getLaunchContext() {
+      return this.launchContext ? JSON.parse(JSON.stringify(this.launchContext)) : null;
     }
 
     on(event, fn) {
@@ -378,16 +394,20 @@
           this.activePort = channel.port1;
           this.bindPortRpc(this.activePort);
 
-          // Transmit port2 and nonce acknowledgment to cartridge
-          event.source.postMessage({
+          // Transmit port2, nonce acknowledgment, and optional launchContext to cartridge
+          const ackMsg = {
             type: 'cartridge:handshake:ack',
             nonce: this.handshakeNonce,
             capabilities: this.getCapabilities()
-          }, '*', [channel.port2]);
+          };
+          if (this.launchContext) {
+            ackMsg.launchContext = JSON.parse(JSON.stringify(this.launchContext));
+          }
+          event.source.postMessage(ackMsg, '*', [channel.port2]);
 
           this.handshakeEstablished = true;
           window.removeEventListener('message', onWindowMessage);
-          this.log('BRIDGE', 'HANDSHAKE_COMPLETE', 'Privileged RPC bound to MessagePort channel');
+          this.log('BRIDGE', 'HANDSHAKE_COMPLETE', 'Privileged RPC bound to MessagePort channel' + (this.launchContext ? ' (with launchContext)' : ''));
         }
       };
 

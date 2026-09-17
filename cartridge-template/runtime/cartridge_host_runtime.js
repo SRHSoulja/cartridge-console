@@ -869,6 +869,91 @@
     throw new Error('CSPRNG unavailable: cannot generate secure nonce');
   }
 
+  // --- CAIP-19 Asset Identification & Launch Context V1 ---
+  const CAIP19_REGEX = /^([-a-z0-9]{3,8}):([-_a-zA-Z0-9]{1,32})\/([-a-z0-9]{3,8}):(0x[0-9a-fA-F]{40}|[-_a-zA-Z0-9]{1,64})(?:\/([-_a-zA-Z0-9]{1,78}))?$/;
+  const MAX_LAUNCH_CONTEXT_BYTES = 1024;
+  const ROUTE_REGEX = /^[a-zA-Z0-9:_\-\/]+$/;
+
+  function parseCaip19(uri) {
+    if (typeof uri !== 'string') return null;
+    const match = CAIP19_REGEX.exec(uri);
+    if (!match) return null;
+    return {
+      chainId: `${match[1]}:${match[2]}`,
+      chainNamespace: match[1],
+      chainReference: match[2],
+      assetNamespace: match[3],
+      assetReference: match[4],
+      tokenId: match[5] || null
+    };
+  }
+
+  function validateLaunchContext(context) {
+    if (!context || typeof context !== 'object' || Array.isArray(context)) {
+      throw new TypeError('launchContext must be a non-null plain object');
+    }
+
+    const serialized = JSON.stringify(context);
+    if (serialized.length > MAX_LAUNCH_CONTEXT_BYTES) {
+      throw new RangeError(`launchContext exceeds maximum size of ${MAX_LAUNCH_CONTEXT_BYTES} bytes`);
+    }
+
+    if (context.version !== '1') {
+      throw new Error(`Invalid launchContext version: expected "1", got "${context.version}"`);
+    }
+
+    if (context.resource !== undefined) {
+      if (typeof context.resource !== 'string') {
+        throw new TypeError('launchContext.resource must be a string');
+      }
+      const parsed = parseCaip19(context.resource);
+      if (!parsed) {
+        throw new Error(`Invalid CAIP-19 resource identifier: "${context.resource}"`);
+      }
+    }
+
+    if (context.route !== undefined) {
+      if (typeof context.route !== 'string' || context.route.length > 64 || !ROUTE_REGEX.test(context.route)) {
+        throw new Error(`Invalid launchContext.route: "${context.route}". Must be <= 64 chars matching ${ROUTE_REGEX}`);
+      }
+    }
+
+    if (context.params !== undefined) {
+      if (!context.params || typeof context.params !== 'object' || Array.isArray(context.params)) {
+        throw new TypeError('launchContext.params must be a plain object');
+      }
+      const keys = Object.keys(context.params);
+      if (keys.length > 10) {
+        throw new RangeError('launchContext.params cannot have more than 10 keys');
+      }
+      for (const k of keys) {
+        const v = context.params[k];
+        const t = typeof v;
+        if (t !== 'string' && t !== 'number' && t !== 'boolean') {
+          throw new TypeError(`launchContext.params["${k}"] must be a string, number, or boolean`);
+        }
+      }
+    }
+
+    return true;
+  }
+
+  function sanitizeLaunchContext(context) {
+    if (!context) return null;
+    try {
+      validateLaunchContext(context);
+      const sanitized = { version: '1' };
+      if (typeof context.resource === 'string') sanitized.resource = context.resource;
+      if (typeof context.route === 'string') sanitized.route = context.route;
+      if (context.params && typeof context.params === 'object' && !Array.isArray(context.params)) {
+        sanitized.params = { ...context.params };
+      }
+      return Object.freeze(sanitized);
+    } catch (_) {
+      return null;
+    }
+  }
+
   // --- DirectHostAdapter ---
   class DirectHostAdapter {
     constructor(options = {}) {
@@ -879,6 +964,7 @@
       this.activeAccount = null;
       this.activeChainId = normalizeChainId(options.chainId) || DEFAULT_CHAIN_ID;
       this.grantedPolicy = options.grantedPolicy || null;
+      this._launchContext = sanitizeLaunchContext(options.launchContext);
 
       if (this.injectedProvider && this.injectedProvider.on) {
         this.injectedProvider.on('chainChanged', (cId) => {
@@ -897,6 +983,10 @@
 
     getChainId() {
       return this.activeChainId;
+    }
+
+    getLaunchContext() {
+      return this._launchContext ? JSON.parse(JSON.stringify(this._launchContext)) : null;
     }
 
     setAccount(addr) {
@@ -1082,10 +1172,11 @@
 
   // --- BridgeHostAdapter with Strict MessagePort Isolation ---
   class BridgeHostAdapter {
-    constructor(port, initialCapabilities) {
+    constructor(port, initialCapabilities, launchContext = null) {
       this.name = 'bridge';
       this.port = port || null;
       this.portAttached = !!port;
+      this._launchContext = sanitizeLaunchContext(launchContext);
       this.activeAccount = (initialCapabilities?.wallet?.address) || null;
       this.activeChainId = normalizeChainId(initialCapabilities?.evm?.chainId) || DEFAULT_CHAIN_ID;
       this.caps = initialCapabilities || {
@@ -1117,6 +1208,10 @@
 
     getChainId() {
       return this.activeChainId;
+    }
+
+    getLaunchContext() {
+      return this._launchContext ? JSON.parse(JSON.stringify(this._launchContext)) : null;
     }
 
     getCapabilities() {
@@ -1438,6 +1533,11 @@
       return await this.getAdapter().waitForReceipt(txHash, maxAttempts);
     },
 
+    getLaunchContext() {
+      const adapter = this.getAdapter();
+      return adapter && typeof adapter.getLaunchContext === 'function' ? adapter.getLaunchContext() : null;
+    },
+
     on(event, handler) {
       if (!this._listeners.has(event)) this._listeners.set(event, new Set());
       this._listeners.get(event).add(handler);
@@ -1472,21 +1572,24 @@
       const handshakeNonce = generateSecureNonce('hs_');
       let handshakeResolved = false;
 
-      const finishHandshake = (caps, port) => {
+      const finishHandshake = (caps, port, launchContext) => {
         if (handshakeResolved) return;
         handshakeResolved = true;
         this._handshakeEstablished = true;
-        const bridgeAdapter = new BridgeHostAdapter(port, caps);
+        const bridgeAdapter = new BridgeHostAdapter(port, caps, launchContext);
         CartridgeHost.setAdapter(bridgeAdapter);
         if (options.onAttached) options.onAttached(bridgeAdapter);
       };
 
       const handleAck = (event) => {
         const d = event.data;
-        if (!d || d.id !== handshakeNonce || d.type !== 'cartridge:handshake_ack') return;
+        if (!d) return;
+        const ackNonce = d.nonce || d.id;
+        if (ackNonce !== handshakeNonce) return;
+        if (d.type !== 'cartridge:handshake:ack' && d.type !== 'cartridge:handshake_ack') return;
         window.removeEventListener('message', handleAck);
         const port = (event.ports && event.ports[0]) || (channel ? channel.port1 : null);
-        finishHandshake(d.capabilities, port);
+        finishHandshake(d.capabilities, port, d.launchContext);
       };
 
       window.addEventListener('message', handleAck);
@@ -1635,6 +1738,11 @@
     normalizeLogs,
     CartridgeLoader,
     generateSecureNonce,
-    validateManifestV1
+    validateManifestV1,
+    CAIP19_REGEX,
+    MAX_LAUNCH_CONTEXT_BYTES,
+    parseCaip19,
+    validateLaunchContext,
+    sanitizeLaunchContext
   };
 }));

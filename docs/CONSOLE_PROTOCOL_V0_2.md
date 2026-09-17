@@ -30,10 +30,15 @@ sequenceDiagram
     participant Provider as Web3 / EIP-1193 Provider
 
     Cartridge->>Host: window.parent.postMessage({ type: 'cartridge:handshake' })
-    Host->>Host: Generate CSPRNG nonce & create MessageChannel
-    Host-->>Cartridge: window.postMessage({ type: 'cartridge:handshake:ack', nonce, capabilities }, transfer: [port2])
-    Cartridge->>Cartridge: Bind BridgeHostAdapter to MessagePort
+    Host->>Host: Generate CSPRNG nonce, sanitize optional launchContext, & create MessageChannel
+    Host-->>Cartridge: window.postMessage({ type: 'cartridge:handshake:ack', nonce, capabilities, launchContext? }, transfer: [port2])
+    Cartridge->>Cartridge: Bind BridgeHostAdapter to MessagePort & record launchContext
 ```
+
+### Initial Handshake Payload
+The host acknowledges the handshake by returning a cryptographic nonce, the host's current capabilities, and an optional [Launch Context V1](LAUNCH_CONTEXT_V1.md) (`launchContext`):
+- `capabilities`: Object declaring provider features and sandbox environment.
+- `launchContext`: Optional object specifying initial presentation routing and CAIP-19 asset identification. **Security Invariant: `LAUNCH CONTEXT != AUTHORITY`.**
 
 ### Initial Capabilities Object
 
