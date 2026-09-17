@@ -89,10 +89,35 @@ contract ProtocolTest is Test {
         assertEq(keccak256(assembled), keccak256(expected), "Assembled multi-chunk content must match expected");
     }
 
-    function test_ContentStore_CounterfactualPointerPrediction() public view {
-        bytes memory sample = "Predictable Content Bytecode";
+    function test_ContentStore_PredictedPointerEqualsActualPointer() public {
+        bytes memory sample = "Predictable Content Bytecode Exact Match";
         address predicted = store.predictPointer(sample);
         assertTrue(predicted != address(0));
+
+        // Actual deployment must match predicted pointer exactly
+        (bytes32 digest, address actual) = store.store(sample);
+        assertEq(actual, predicted, "Actual pointer returned by store must match predicted pointer");
+        assertEq(keccak256(store.read(digest)), keccak256(sample));
+    }
+
+    function test_ContentStore_RevertsOnPreExistingInvalidCodeAtPointer() public {
+        bytes memory sample = "Adversarial Collision Target";
+        bytes32 digest = keccak256(sample);
+        address predicted = store.predictPointer(sample);
+
+        // Simulate an attacker deploying an arbitrary/different contract at predicted address
+        bytes memory maliciousCode = hex"0011223344";
+        vm.etch(predicted, maliciousCode);
+
+        // Store must reject registering the malicious pre-existing contract
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                ContentStore.InvalidExistingPointer.selector,
+                predicted,
+                digest
+            )
+        );
+        store.store(sample);
     }
 
     function test_ContentStore_RevertOnEmpty() public {
@@ -224,5 +249,27 @@ contract ProtocolTest is Test {
         vm.prank(bob);
         vm.expectRevert(abi.encodeWithSelector(CartridgeRegistry.Unauthorized.selector, cartridgeId, bob));
         registry.acceptOwnership(cartridgeId);
+    }
+
+    function test_CartridgeRegistry_RevertsOnDuplicateVersion() public {
+        vm.startPrank(alice);
+        bytes32 salt = bytes32(uint256(12345));
+        bytes32 cartridgeId = registry.registerCartridge(salt, "MyCartridge");
+        bytes32 manifest1 = keccak256("manifest_v1");
+        bytes32 manifest2 = keccak256("manifest_v2");
+
+        registry.publishRelease(cartridgeId, "1.0.0", manifest1);
+        assertTrue(registry.hasVersion(cartridgeId, "1.0.0"));
+
+        // Attempting to republish "1.0.0" must revert
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                CartridgeRegistry.VersionAlreadyPublished.selector,
+                cartridgeId,
+                "1.0.0"
+            )
+        );
+        registry.publishRelease(cartridgeId, "1.0.0", manifest2);
+        vm.stopPrank();
     }
 }

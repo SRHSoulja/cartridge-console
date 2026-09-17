@@ -7,12 +7,19 @@ import { SSTORE2 } from "../utils/SSTORE2.sol";
  * @title ContentStore
  * @notice Permanent, immutable, content-addressed on-chain store for Console cartridges & assets.
  * @dev Deduplicates storage by indexing chunks on `digest = keccak256(data)`.
- *      Uses SSTORE2 runtime code deployment for optimal read gas and on-chain persistence.
- *      Batch operations use internal storage to preserve original msg.sender provenance in events.
+ *      Uses deterministic CREATE2 SSTORE2 deployments with domain-separated salt:
+ *      salt = keccak256(abi.encode(CONTENT_POINTER_DOMAIN, digest)).
+ *      Predicted pointer matches the actual deployed address bit-for-bit.
+ *      If a contract already exists at the predicted pointer, validates that its bytecode
+ *      strictly matches the expected SSTORE2 representation (0x00 STOP prefix + exact data)
+ *      to prevent registering unrelated pre-existing contracts.
  */
 contract ContentStore {
     /// @dev Maximum single chunk size permitted by Spurious Dragon EIP-170 code size limit (24576 - 1 byte STOP = 24575)
     uint256 public constant MAX_CHUNK_SIZE = 24575;
+
+    /// @notice Domain separator for deterministic storage pointer salts
+    bytes32 public constant CONTENT_POINTER_DOMAIN = keccak256("CONSOLE_CONTENT_STORE_V1");
 
     /// @notice Mapping from keccak256 content digest to SSTORE2 pointer contract address
     mapping(bytes32 => address) public chunkAddresses;
@@ -29,6 +36,25 @@ contract ContentStore {
     error ChunkTooLarge(uint256 size, uint256 maxAllowed);
     error ChunkEmpty();
     error ChunkNotFound(bytes32 digest);
+    error InvalidExistingPointer(address pointer, bytes32 digest);
+    error PointerMismatch(address predicted, address actual);
+
+    /**
+     * @notice Computes domain-separated salt for deterministic CREATE2 deployment.
+     */
+    function computeSalt(bytes32 digest) public pure returns (bytes32) {
+        return keccak256(abi.encode(CONTENT_POINTER_DOMAIN, digest));
+    }
+
+    /**
+     * @notice Predicts the exact CREATE2 address for deterministic SSTORE2 deployment.
+     * @dev predicted pointer == actual deployed pointer returned by store(data).
+     */
+    function predictPointer(bytes calldata data) external view returns (address) {
+        bytes32 digest = keccak256(data);
+        bytes32 salt = computeSalt(digest);
+        return SSTORE2.predictCounterfactualAddress(data, salt, address(this));
+    }
 
     /**
      * @notice Stores a chunk of data if not already present.
@@ -57,7 +83,7 @@ contract ContentStore {
     }
 
     /**
-     * @dev Internal chunk storage and deduplication logic.
+     * @dev Internal chunk storage and deduplication logic using deterministic CREATE2.
      */
     function _store(bytes memory data) internal returns (bytes32 digest, address pointer) {
         if (data.length == 0) revert ChunkEmpty();
@@ -71,19 +97,33 @@ contract ContentStore {
             return (digest, pointer);
         }
 
-        pointer = SSTORE2.write(data);
+        bytes32 salt = computeSalt(digest);
+        address predicted = SSTORE2.predictCounterfactualAddress(data, salt, address(this));
+
+        // If code already exists at predicted address, validate it strictly
+        if (predicted.code.length > 0) {
+            // Must have exactly data.length + 1 bytes (0x00 STOP prefix + data)
+            if (predicted.code.length != data.length + 1) {
+                revert InvalidExistingPointer(predicted, digest);
+            }
+            // Read stored bytes (skips 0x00 prefix) and verify exact content match
+            bytes memory deployedContent = SSTORE2.read(predicted);
+            if (keccak256(deployedContent) != digest) {
+                revert InvalidExistingPointer(predicted, digest);
+            }
+            pointer = predicted;
+        } else {
+            // Deploy counterfactual contract with domain-separated salt
+            pointer = SSTORE2.writeCounterfactual(data, salt);
+            if (pointer != predicted) {
+                revert PointerMismatch(predicted, pointer);
+            }
+        }
+
         chunkAddresses[digest] = pointer;
         chunkSizes[digest] = uint32(data.length);
 
         emit ContentStored(digest, pointer, data.length, msg.sender);
-    }
-
-    /**
-     * @notice Predicts the CREATE2 address for counterfactual SSTORE2 deployment.
-     */
-    function predictPointer(bytes calldata data) external view returns (address) {
-        bytes32 salt = keccak256(data);
-        return SSTORE2.predictCounterfactualAddress(data, salt, address(this));
     }
 
     /**

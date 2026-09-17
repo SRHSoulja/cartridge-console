@@ -19,6 +19,7 @@
     root.createDefaultResolver = exports.createDefaultResolver;
     root.decodeAbiBytes = exports.decodeAbiBytes;
     root.decodeAbiBytesRaw = exports.decodeAbiBytesRaw;
+    root.decompressDeflate = exports.decompressDeflate;
   }
 }(typeof self !== 'undefined' ? self : this, function() {
 
@@ -212,6 +213,43 @@
   }
 
   /**
+   * Helper to decompress raw deflate bytes across Node and modern browser runtimes
+   */
+  async function decompressDeflate(data) {
+    if (typeof require === 'function') {
+      try {
+        const zlib = require('zlib');
+        if (typeof zlib.inflateSync === 'function') {
+          return new Uint8Array(zlib.inflateSync(data));
+        }
+      } catch (_) {}
+    }
+    if (typeof DecompressionStream !== 'undefined') {
+      const ds = new DecompressionStream('deflate');
+      const writer = ds.writable.getWriter();
+      writer.write(data);
+      writer.close();
+      const reader = ds.readable.getReader();
+      const chunks = [];
+      let total = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        total += value.length;
+      }
+      const result = new Uint8Array(total);
+      let offset = 0;
+      for (const c of chunks) {
+        result.set(c, offset);
+        offset += c.length;
+      }
+      return result;
+    }
+    throw new Error('No decompression library or DecompressionStream available to handle deflate encoding');
+  }
+
+  /**
    * Onchain Cartridge Resolver
    * Resolves cartridges from on-chain CartridgeRegistry and ContentStore contracts.
    * Enforces cryptographic integrity of manifest and assembled package chunks.
@@ -337,10 +375,33 @@
 
       const manifest = JSON.parse(manifestText);
 
-      // 4. Resolve Entry Point & Chunks
-      const entry = manifest.entry || {};
-      const expectedContentHash = (entry.digest || manifest.integrity?.contentHash || '').toLowerCase();
-      const chunks = entry.chunks || (expectedContentHash ? [expectedContentHash] : []);
+      // Verify Cartridge ID match (enforce canonical ID consistency)
+      const manifestCartridgeId = manifest.cartridgeId || manifest.id;
+      if (manifestCartridgeId) {
+        const normManifestId = manifestCartridgeId.toLowerCase();
+        const matchesHex = cartridgeBytes32 && (normManifestId === cartridgeBytes32.toLowerCase());
+        const matchesName = normId && (normManifestId === normId);
+        if (!matchesHex && !matchesName) {
+          throw new Error(`Cartridge ID mismatch: requested "${cartridgeId}", manifest declared "${manifestCartridgeId}"`);
+        }
+      }
+
+      // 4. Resolve Entry Point & Chunks with Manifest V1 Descriptor Model
+      const entry = typeof manifest.entry === 'object' && manifest.entry !== null
+        ? manifest.entry
+        : { path: manifest.entry || 'index.html', mediaType: 'text/html' };
+
+      const mediaType = entry.mediaType || 'text/html';
+      const encoding = entry.encoding || 'identity';
+      const expectedStoredDigest = (entry.digest || manifest.integrity?.contentHash || '').toLowerCase();
+      const expectedStoredSize = entry.size !== undefined ? entry.size : null;
+      const expectedDecodedDigest = entry.decodedDigest ? entry.decodedDigest.toLowerCase() : null;
+      const expectedDecodedSize = entry.decodedSize !== undefined ? entry.decodedSize : null;
+      const chunks = entry.chunks || (expectedStoredDigest ? [expectedStoredDigest] : []);
+
+      // The expectedContentHash presented to host_core for verifying packageBytes
+      // If content is decoded, packageBytes matches decodedDigest, otherwise storedDigest
+      const expectedContentHash = expectedDecodedDigest || expectedStoredDigest;
 
       return {
         id: manifest.id || cartridgeId,
@@ -366,13 +427,54 @@
             merged.set(c, offset);
             offset += c.length;
           }
-          if (asRaw || entry.format === 'binary') {
-            return merged;
+
+          // Verify stored size
+          if (expectedStoredSize !== null && merged.length !== expectedStoredSize) {
+            throw new Error(`Stored chunk size mismatch! Expected ${expectedStoredSize}, got ${merged.length}`);
           }
+
+          // Verify stored digest
+          if (expectedStoredDigest) {
+            const computedStored = ('0x' + this.keccakFn(merged)).toLowerCase();
+            if (computedStored !== expectedStoredDigest) {
+              throw new Error(`Stored content integrity verification failed! Expected ${expectedStoredDigest}, computed ${computedStored}`);
+            }
+          }
+
+          // Handle compression / encoding
+          let finalBytes = merged;
+          if (encoding === 'deflate') {
+            finalBytes = await decompressDeflate(merged);
+            if (expectedDecodedSize !== null && finalBytes.length !== expectedDecodedSize) {
+              throw new Error(`Decoded content size mismatch! Expected ${expectedDecodedSize}, got ${finalBytes.length}`);
+            }
+            if (expectedDecodedDigest) {
+              const computedDecoded = ('0x' + this.keccakFn(finalBytes)).toLowerCase();
+              if (computedDecoded !== expectedDecodedDigest) {
+                throw new Error(`Decoded content integrity verification failed! Expected ${expectedDecodedDigest}, computed ${computedDecoded}`);
+              }
+            }
+          } else if (encoding !== 'identity') {
+            throw new Error(`Unsupported content encoding: ${encoding}`);
+          }
+
+          // Return binary Uint8Array or UTF-8 text string based on mediaType
+          const isText = mediaType.startsWith('text/') || mediaType === 'application/json' || mediaType === 'application/javascript';
+          if (asRaw || !isText || entry.format === 'binary') {
+            return finalBytes;
+          }
+
           if (typeof TextDecoder !== 'undefined') {
-            return new TextDecoder('utf-8').decode(merged);
+            return new TextDecoder('utf-8').decode(finalBytes);
           }
-          return decodeAbiBytes(merged);
+          if (typeof Buffer !== 'undefined') {
+            return Buffer.from(finalBytes).toString('utf8');
+          }
+          let str = '';
+          for (let i = 0; i < finalBytes.length; i++) {
+            str += String.fromCharCode(finalBytes[i]);
+          }
+          return str;
         }
       };
     }
@@ -413,6 +515,7 @@
     OnchainCartridgeResolver,
     createDefaultResolver,
     decodeAbiBytes,
-    decodeAbiBytesRaw
+    decodeAbiBytesRaw,
+    decompressDeflate
   };
 }));

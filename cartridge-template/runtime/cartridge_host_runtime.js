@@ -1,6 +1,6 @@
 /**
- * Console Runtime V0.1 Client Module (Hardened)
- * Universal client abstraction for on-chain and web cartridges.
+ * Console Runtime V0.2.0 Client Module (Hardened)
+ * Universal client abstraction for Console Protocol V0.2 and Cartridge Protocol V0.1.
  *
  * Core Security Features:
  *  - Explicit Canonical Selectors derived via Keccak-256
@@ -8,8 +8,11 @@
  *  - Defense-in-depth Elevated Asset Operation Firewall (Approvals & Transfers)
  *  - Forward-compatible argument constraints (spender, recipient, maxAmount, tokenIds)
  *  - EIP-1193 Hexadecimal Chain Identity (e.g. '0xaa36a7')
- *  - Strict separation of EIP-1193 provider errors (4901 ChainDisconnected) vs Runtime Policy errors (4003 PolicyViolation)
+ *  - Strict separation of EIP-1193 provider errors (4901 ChainDisconnected, 4900 Disconnected) vs Runtime Policy errors (4003 PolicyViolation)
+ *  - Full RFC 8785 JSON Canonicalization Scheme (JCS) with domain validation
+ *  - Strict SemVer 2.0.0 Prerelease Compatibility Evaluator
  *  - Package Integrity Verification Before Execution (CartridgeLoader)
+ *  - Fail-closed CSPRNG handshake nonce generation
  *  - Minimal Sandbox Permissions (default 'allow-scripts')
  *  - Resource limits & DoS Protection
  */
@@ -32,9 +35,12 @@
     root.normalizeChainId = exports.normalizeChainId;
     root.toCaip2ChainId = exports.toCaip2ChainId;
     root.canonicalizeJson = exports.canonicalizeJson;
+    root.parseSemVer = exports.parseSemVer;
+    root.satisfiesSemVer = exports.satisfiesSemVer;
     root.normalizeLog = exports.normalizeLog;
     root.normalizeLogs = exports.normalizeLogs;
     root.CartridgeLoader = exports.CartridgeLoader;
+    root.generateSecureNonce = exports.generateSecureNonce;
   }
 }(typeof self !== 'undefined' ? self : this, function() {
 
@@ -96,44 +102,49 @@
   }
 
   // RFC 8785 JSON Canonicalization Scheme (JCS)
-  // Deterministic serialization: UTF-16 code unit property sorting, no whitespace, I-JSON number formatting
+  // Deterministic serialization: UTF-16 code unit property sorting, no whitespace, ECMAScript number formatting, domain validation
   function canonicalizeJson(value) {
-    if (value === undefined || typeof value === 'symbol' || typeof value === 'function') {
-      return undefined;
+    if (value === undefined) {
+      throw new TypeError('JCS: undefined value is not supported in canonical JSON');
+    }
+    if (typeof value === 'function') {
+      throw new TypeError('JCS: function value is not supported in canonical JSON');
+    }
+    if (typeof value === 'symbol') {
+      throw new TypeError('JCS: symbol value is not supported in canonical JSON');
+    }
+    if (typeof value === 'bigint') {
+      throw new TypeError('JCS: BigInt value is not supported in canonical JSON');
     }
     if (value === null) return 'null';
     if (typeof value === 'boolean') return value ? 'true' : 'false';
 
     if (typeof value === 'number') {
       if (!Number.isFinite(value)) {
-        throw new TypeError('RFC 8785 disallows non-finite numbers (NaN, Infinity)');
+        throw new TypeError('JCS: non-finite number is not supported in canonical JSON');
       }
       if (Object.is(value, -0)) return '0';
       return JSON.stringify(value);
     }
 
     if (typeof value === 'string') {
-      if (/[\uD800-\uDFFF]/.test(value)) {
-        for (let i = 0; i < value.length; i++) {
-          const code = value.charCodeAt(i);
-          if (code >= 0xD800 && code <= 0xDBFF) {
-            if (i + 1 >= value.length) throw new TypeError('Invalid Unicode: lone high surrogate');
-            const next = value.charCodeAt(i + 1);
-            if (next < 0xDC00 || next > 0xDFFF) throw new TypeError('Invalid Unicode: unpaired high surrogate');
-            i++;
-          } else if (code >= 0xDC00 && code <= 0xDFFF) {
-            throw new TypeError('Invalid Unicode: lone low surrogate');
-          }
+      // Validate Unicode: reject lone or unpaired surrogates
+      for (let i = 0; i < value.length; i++) {
+        const code = value.charCodeAt(i);
+        if (code >= 0xD800 && code <= 0xDBFF) {
+          if (i + 1 >= value.length) throw new TypeError('JCS: lone high surrogate');
+          const next = value.charCodeAt(i + 1);
+          if (next < 0xDC00 || next > 0xDFFF) throw new TypeError('JCS: unpaired high surrogate');
+          i++;
+        } else if (code >= 0xDC00 && code <= 0xDFFF) {
+          throw new TypeError('JCS: lone low surrogate');
         }
       }
       return JSON.stringify(value);
     }
 
     if (Array.isArray(value)) {
-      const elements = value.map(v => {
-        const canon = canonicalizeJson(v);
-        return canon === undefined ? 'null' : canon;
-      });
+      const elements = value.map(v => canonicalizeJson(v));
       return '[' + elements.join(',') + ']';
     }
 
@@ -144,14 +155,14 @@
       for (const key of keys) {
         const val = value[key];
         if (val === undefined || typeof val === 'symbol' || typeof val === 'function') {
-          continue;
+          throw new TypeError(`JCS: object contains unsupported property type for key "${key}": ${typeof val}`);
         }
         pairs.push(canonicalizeJson(key) + ':' + canonicalizeJson(val));
       }
       return '{' + pairs.join(',') + '}';
     }
 
-    throw new TypeError(`Cannot canonicalize unsupported type: ${typeof value}`);
+    throw new TypeError(`JCS: unsupported type: ${typeof value}`);
   }
 
   // Strict SemVer parser
@@ -168,15 +179,80 @@
     };
   }
 
-  // Strict SemVer range satisfaction evaluator
+  function comparePrereleases(preA, preB) {
+    if (preA === preB) return 0;
+    if (!preA && preB) return 1; // stable > prerelease
+    if (preA && !preB) return -1; // prerelease < stable
+    const partsA = preA.split('.');
+    const partsB = preB.split('.');
+    const len = Math.max(partsA.length, partsB.length);
+    for (let i = 0; i < len; i++) {
+      if (i >= partsA.length) return -1;
+      if (i >= partsB.length) return 1;
+      const a = partsA[i];
+      const b = partsB[i];
+      if (a === b) continue;
+      const aNum = /^\d+$/.test(a);
+      const bNum = /^\d+$/.test(b);
+      if (aNum && bNum) {
+        return parseInt(a, 10) - parseInt(b, 10) > 0 ? 1 : -1;
+      }
+      if (aNum && !bNum) return -1; // numeric < non-numeric
+      if (!aNum && bNum) return 1;
+      return a > b ? 1 : -1;
+    }
+    return 0;
+  }
+
+  function compareSemVer(v1, v2) {
+    if (v1.major !== v2.major) return v1.major > v2.major ? 1 : -1;
+    if (v1.minor !== v2.minor) return v1.minor > v2.minor ? 1 : -1;
+    if (v1.patch !== v2.patch) return v1.patch > v2.patch ? 1 : -1;
+    return comparePrereleases(v1.prerelease, v2.prerelease);
+  }
+
+  // Strict SemVer range satisfaction evaluator with SemVer 2.0.0 prerelease precedence
   function satisfiesSemVer(targetVersion, rangeStr) {
     const target = parseSemVer(targetVersion);
     if (!target || typeof rangeStr !== 'string') return false;
-    const range = rangeStr.trim();
+    const cleanRange = rangeStr.trim();
 
-    if (range.startsWith('^')) {
-      const base = parseSemVer(range.slice(1));
-      if (!base) return false;
+    let op = '=';
+    let baseStr = cleanRange;
+    if (cleanRange.startsWith('^') || cleanRange.startsWith('~')) {
+      op = cleanRange[0];
+      baseStr = cleanRange.slice(1);
+    } else if (cleanRange.startsWith('>=')) {
+      op = '>=';
+      baseStr = cleanRange.slice(2);
+    } else if (cleanRange.startsWith('<=')) {
+      op = '<=';
+      baseStr = cleanRange.slice(2);
+    } else if (cleanRange.startsWith('>')) {
+      op = '>';
+      baseStr = cleanRange.slice(1);
+    } else if (cleanRange.startsWith('<')) {
+      op = '<';
+      baseStr = cleanRange.slice(1);
+    }
+
+    const base = parseSemVer(baseStr);
+    if (!base) return false;
+
+    // Strict Prerelease Rule:
+    // A prerelease version NEVER satisfies a range unless the range explicitly specified a prerelease on the same major.minor.patch tuple
+    if (target.prerelease && !base.prerelease) {
+      return false;
+    }
+
+    if (target.prerelease && base.prerelease) {
+      if (target.major !== base.major || target.minor !== base.minor || target.patch !== base.patch) {
+        return false;
+      }
+      return comparePrereleases(target.prerelease, base.prerelease) >= 0;
+    }
+
+    if (op === '^') {
       if (base.major === 0) {
         if (base.minor === 0) {
           return target.major === 0 && target.minor === 0 && target.patch === base.patch;
@@ -188,17 +264,15 @@
       );
     }
 
-    if (range.startsWith('~')) {
-      const base = parseSemVer(range.slice(1));
-      if (!base) return false;
+    if (op === '~') {
       return target.major === base.major && target.minor === base.minor && target.patch >= base.patch;
     }
 
-    const exact = parseSemVer(range);
-    if (exact) {
-      return target.major === exact.major && target.minor === exact.minor && target.patch === exact.patch;
-    }
-    return false;
+    if (op === '>=') return compareSemVer(target, base) >= 0;
+    if (op === '<=') return compareSemVer(target, base) <= 0;
+    if (op === '>') return compareSemVer(target, base) > 0;
+    if (op === '<') return compareSemVer(target, base) < 0;
+    return compareSemVer(target, base) === 0;
   }
 
   // Parse 20-byte address from 32-byte ABI word
@@ -744,15 +818,28 @@
   }
 
   function generateSecureNonce(prefix = 'hs_') {
+    let c = null;
     if (typeof crypto !== 'undefined') {
-      if (crypto.randomUUID) return prefix + crypto.randomUUID();
-      if (crypto.getRandomValues) {
+      c = crypto;
+    } else if (typeof globalThis !== 'undefined' && globalThis.crypto) {
+      c = globalThis.crypto;
+    } else if (typeof require === 'function') {
+      try {
+        c = require('crypto');
+      } catch (_) {}
+    }
+    if (c) {
+      if (typeof c.randomUUID === 'function') return prefix + c.randomUUID();
+      if (typeof c.getRandomValues === 'function') {
         const arr = new Uint8Array(16);
-        crypto.getRandomValues(arr);
+        c.getRandomValues(arr);
         return prefix + Array.from(arr, b => b.toString(16).padStart(2, '0')).join('');
       }
+      if (typeof c.randomBytes === 'function') {
+        return prefix + c.randomBytes(16).toString('hex');
+      }
     }
-    return prefix + Date.now() + '_' + Math.random().toString(36).substr(2, 12);
+    throw new Error('CSPRNG unavailable: cannot generate secure nonce');
   }
 
   // --- DirectHostAdapter ---
@@ -1416,6 +1503,7 @@
     satisfiesSemVer,
     normalizeLog,
     normalizeLogs,
-    CartridgeLoader
+    CartridgeLoader,
+    generateSecureNonce
   };
 }));

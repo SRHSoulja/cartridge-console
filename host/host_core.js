@@ -40,7 +40,7 @@
   class GenericHostCore {
     constructor(options = {}) {
       this.resolver = options.resolver || null;
-      this.rpcUrl = options.rpcUrl || DEFAULT_RPC;
+      this.rpcUrl = options.rpcUrl !== undefined ? options.rpcUrl : DEFAULT_RPC;
       this.activeChainId = normalizeChainId(options.chainId) || DEFAULT_CHAIN_ID;
       this.activeAccount = options.account || null;
       this.providerName = options.providerName || 'Console Host (Runtime V0.1)';
@@ -218,23 +218,33 @@
 
       const contracts = requestedContracts.map(req => {
         const address = req.address.toLowerCase();
-        const grant = hostGrants[address] || {};
+        const grant = hostGrants[address];
 
-        // Writes: granted ⊆ requested (if not requested, always false; if requested, true unless host overrides to false)
-        const hostAllowsWrites = grant.writes !== undefined ? Boolean(grant.writes) : Boolean(req.writes);
-        const writesGranted = hostAllowsWrites && Boolean(req.writes);
+        if (!grant) {
+          // Invariant: writes default to DENIED without explicit host grant
+          return {
+            address,
+            name: req.name || address.substring(0, 8),
+            writes: false,
+            allowedSelectors: [],
+            allowNativeValue: false,
+            maxValueWei: '0',
+            isElevated: false,
+            argumentConstraints: req.argumentConstraints || req.constraints || null
+          };
+        }
+
+        // Writes: granted ⊆ requested (requires BOTH manifest request AND explicit host grant)
+        const writesGranted = Boolean(req.writes) && Boolean(grant.writes);
 
         // Selectors: strict intersection between requested and host granted selectors
         const reqSelectors = Array.isArray(req.allowedSelectors) ? req.allowedSelectors.map(s => s.toLowerCase()) : [];
-        let allowedSelectors = writesGranted ? [...reqSelectors] : [];
-        if (writesGranted && Array.isArray(grant.allowedSelectors)) {
-          const grantSet = new Set(grant.allowedSelectors.map(s => s.toLowerCase()));
-          allowedSelectors = reqSelectors.filter(s => grantSet.has(s));
-        }
+        const grantSelectors = Array.isArray(grant.allowedSelectors) ? grant.allowedSelectors.map(s => s.toLowerCase()) : [];
+        const grantSet = new Set(grantSelectors);
+        const allowedSelectors = writesGranted ? reqSelectors.filter(s => grantSet.has(s)) : [];
 
-        // Native value: granted ⊆ requested
-        const hostAllowsValue = grant.allowNativeValue !== undefined ? Boolean(grant.allowNativeValue) : Boolean(req.allowNativeValue);
-        const allowNativeValue = hostAllowsValue && Boolean(req.allowNativeValue);
+        // Native value: requires BOTH manifest request AND explicit host grant
+        const allowNativeValue = writesGranted && Boolean(req.allowNativeValue) && Boolean(grant.allowNativeValue);
         let maxValueWei = '0';
         if (allowNativeValue) {
           const reqMax = BigInt(req.maxValueWei || '0');
@@ -242,8 +252,8 @@
           maxValueWei = (grantMax < reqMax ? grantMax : reqMax).toString();
         }
 
-        // Elevated operations: false by default, can only be explicitly granted by host override
-        const isElevated = Boolean(grant.isElevated);
+        // Elevated operations: requires BOTH manifest request AND explicit host grant
+        const isElevated = writesGranted && Boolean(req.isElevated) && Boolean(grant.isElevated);
 
         // Argument constraints: preserve requested constraints, cannot be loosened
         const argumentConstraints = req.argumentConstraints || req.constraints || null;
@@ -278,7 +288,13 @@
         // Enforce strict minimal sandbox (NEVER allow-same-origin)
         this.iframe.setAttribute('sandbox', 'allow-scripts');
         this.setupHandshakeListener();
-        this.iframe.srcdoc = packageBytes;
+        if (typeof packageBytes === 'string') {
+          this.iframe.srcdoc = packageBytes;
+        } else if (packageBytes instanceof Uint8Array && typeof URL !== 'undefined' && typeof Blob !== 'undefined') {
+          const mediaType = this.activeManifest?.entry?.mediaType || 'text/html';
+          const blob = new Blob([packageBytes], { type: mediaType });
+          this.iframe.src = URL.createObjectURL(blob);
+        }
       }
     }
 
@@ -301,7 +317,7 @@
         } catch (_) {}
       }
       if (!randHex) {
-        randHex = Date.now().toString(16) + Math.floor(Math.random() * 0xffffffff).toString(16);
+        throw new Error('CSPRNG unavailable: cannot generate secure handshake nonce');
       }
       this.handshakeNonce = 'hs_' + randHex;
 
@@ -461,7 +477,7 @@
             const { chainId, ...filter } = params || {};
             const reqChain = normalizeChainId(chainId) || this.activeChainId;
             if (reqChain !== this.activeChainId) {
-              throw ConsoleRuntimeError.chainDisconnected(`Active host chain is ${this.activeChainId}, but logs requested chain ${reqChain}`);
+              throw ConsoleRuntimeError.policyViolation(`Active host chain is ${this.activeChainId}, but logs requested chain ${reqChain}`);
             }
             result = await this.executeGetLogs(filter);
             break;
@@ -493,7 +509,7 @@
       if (this.rpcHandler) {
         return await this.rpcHandler({ to, data });
       }
-      if (typeof fetch === 'function') {
+      if (typeof fetch === 'function' && this.rpcUrl) {
         try {
           const resp = await fetch(this.rpcUrl, {
             method: 'POST',
@@ -511,19 +527,22 @@
             if (json && json.error) throw new Error(json.error.message || 'RPC eth_call error');
           }
         } catch (e) {
-          if (typeof window === 'undefined') {
-            return '0x0000000000000000000000000000000000000000000000000000000000000001';
-          }
-          throw e;
+          if (!this.mockMode) throw e;
         }
       }
-      return '0x0000000000000000000000000000000000000000000000000000000000000001';
+      if (this.mockMode) {
+        return '0x0000000000000000000000000000000000000000000000000000000000000001';
+      }
+      throw ConsoleRuntimeError.disconnected('RPC eth_call unavailable');
     }
 
     /**
-     * Submits on-chain transaction via injected provider or dev simulator
+     * Submits on-chain transaction via injected provider, explicit sendTxHandler, or mock simulator
      */
     async executeSendTransaction({ to, data, value }) {
+      if (this.sendTxHandler) {
+        return await this.sendTxHandler({ to, data, value });
+      }
       if (typeof window !== 'undefined' && window.ethereum && this.activeAccount && !this.activeAccount.startsWith('0xsimulated')) {
         return await window.ethereum.request({
           method: 'eth_sendTransaction',
@@ -535,9 +554,24 @@
           }]
         });
       }
-      // Simulated dev transaction hash
-      const randomBytes = Array.from({ length: 32 }, () => Math.floor(Math.random() * 256).toString(16).padStart(2, '0')).join('');
-      return '0x' + randomBytes;
+      if (this.mockMode) {
+        let randHex = '';
+        if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+          const arr = new Uint8Array(32);
+          crypto.getRandomValues(arr);
+          randHex = Array.from(arr, b => b.toString(16).padStart(2, '0')).join('');
+        } else if (typeof require === 'function') {
+          try {
+            const { randomBytes } = require('crypto');
+            randHex = randomBytes(32).toString('hex');
+          } catch (_) {}
+        }
+        if (!randHex) {
+          randHex = '00'.repeat(32);
+        }
+        return '0x' + randHex;
+      }
+      throw ConsoleRuntimeError.unauthorized('No transaction signer available');
     }
 
     async executeGetLogs(filter = {}) {
@@ -557,7 +591,7 @@
           if (Array.isArray(res)) return normalizeLogs(res);
         } catch (_) {}
       }
-      if (typeof fetch === 'function') {
+      if (typeof fetch === 'function' && this.rpcUrl) {
         try {
           const resp = await fetch(this.rpcUrl, {
             method: 'POST',
@@ -573,17 +607,20 @@
           if (json && json.result) return normalizeLogs(json.result);
           if (json && json.error) throw new Error(json.error.message || 'RPC eth_getLogs error');
         } catch (e) {
-          if (typeof window === 'undefined') {
-            return [];
-          }
-          throw e;
+          if (!this.mockMode) throw e;
         }
       }
-      return [];
+      if (this.mockMode) {
+        return [];
+      }
+      throw ConsoleRuntimeError.disconnected('RPC eth_getLogs unavailable');
     }
 
     async fetchReceipt(txHash) {
-      if (typeof fetch === 'function') {
+      if (this.receiptHandler) {
+        return await this.receiptHandler(txHash);
+      }
+      if (typeof fetch === 'function' && this.rpcUrl) {
         try {
           const resp = await fetch(this.rpcUrl, {
             method: 'POST',
@@ -596,14 +633,20 @@
             })
           });
           const json = await resp.json();
-          if (json.result) return json.result;
-        } catch (_) {}
+          if (json && json.result) return json.result;
+          if (json && json.error) throw new Error(json.error.message || 'RPC receipt error');
+        } catch (e) {
+          if (!this.mockMode) throw e;
+        }
       }
-      return {
-        status: '0x1',
-        transactionHash: txHash,
-        blockNumber: '0x1000'
-      };
+      if (this.mockMode) {
+        return {
+          status: '0x1',
+          transactionHash: txHash,
+          blockNumber: '0x1000'
+        };
+      }
+      throw ConsoleRuntimeError.disconnected('Unable to fetch transaction receipt: RPC unavailable');
     }
 
     async connectWallet() {
@@ -611,9 +654,11 @@
         const accs = await window.ethereum.request({ method: 'eth_requestAccounts' });
         this.activeAccount = accs[0];
         this.providerName = window.ethereum.isMetaMask ? 'MetaMask' : (window.ethereum.isPhantom ? 'Phantom' : 'Injected Web3');
-      } else {
-        this.activeAccount = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8';
+      } else if (this.mockMode) {
+        this.activeAccount = this.mockAccount || '0x70997970C51812dc3A010C7d01b50e0d17dc79C8';
         this.providerName = 'Simulated Dev Signer';
+      } else {
+        throw ConsoleRuntimeError.unauthorized('No injected Ethereum provider available');
       }
 
       this.emit('wallet', { account: this.activeAccount, provider: this.providerName });

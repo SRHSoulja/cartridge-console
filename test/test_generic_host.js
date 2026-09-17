@@ -136,23 +136,34 @@ async function runGenericHostTestSuite() {
     assert.ok(granted);
     assert.strictEqual(granted.chainId, SEPOLIA_HEX);
 
-    // Contract 1: PublicLoot (writes: false in manifest -> writes: false in granted)
+    // With no explicit grants: writes MUST default to false for all contracts!
     const lootRule = granted.contracts.find(c => c.address === '0x0676129B2bF4B06f04AfC7301617b6cE3BB2405c'.toLowerCase());
     assert.ok(lootRule);
     assert.strictEqual(lootRule.writes, false);
 
-    // Contract 2: AllowedEcho (writes: true in manifest -> writes: true in granted)
+    // Contract 2: AllowedEcho (writes: true in manifest, but host grant absent -> writes: false)
     const echoRule = granted.contracts.find(c => c.address === '0x7777777777777777777777777777777777777777'.toLowerCase());
     assert.ok(echoRule);
-    assert.strictEqual(echoRule.writes, true);
-    assert.deepStrictEqual(echoRule.allowedSelectors, ['0x12345678', '0xa9059cbb']);
-    assert.strictEqual(echoRule.isElevated, false); // Ordinary write does NOT grant elevated ops
+    assert.strictEqual(echoRule.writes, false, 'Without explicit host grant, writes must default to false');
+    assert.deepStrictEqual(echoRule.allowedSelectors, [], 'Without explicit host grant, allowedSelectors must be empty');
+
+    // Host explicitly grants write permission for AllowedEcho:
+    const customizedBoot = await host.loadCartridge('runtime-test-cartridge', {
+      ['0x7777777777777777777777777777777777777777'.toLowerCase()]: {
+        writes: true,
+        allowedSelectors: ['0x12345678', '0xa9059cbb']
+      }
+    });
+    const grantedRule = customizedBoot.grantedPolicy.contracts.find(c => c.address === '0x7777777777777777777777777777777777777777'.toLowerCase());
+    assert.strictEqual(grantedRule.writes, true, 'Explicit host grant must enable writes');
+    assert.deepStrictEqual(grantedRule.allowedSelectors, ['0x12345678', '0xa9059cbb']);
+    assert.strictEqual(grantedRule.isElevated, false); // Ordinary write does NOT grant elevated ops
 
     // Host user overrides write permission: revoke AllowedEcho
-    const customizedBoot = await host.loadCartridge('runtime-test-cartridge', {
+    const revokedBoot = await host.loadCartridge('runtime-test-cartridge', {
       ['0x7777777777777777777777777777777777777777'.toLowerCase()]: { writes: false }
     });
-    const revokedRule = customizedBoot.grantedPolicy.contracts.find(c => c.address === '0x7777777777777777777777777777777777777777'.toLowerCase());
+    const revokedRule = revokedBoot.grantedPolicy.contracts.find(c => c.address === '0x7777777777777777777777777777777777777777'.toLowerCase());
     assert.strictEqual(revokedRule.writes, false, 'User/host override must successfully revoke write permission');
   });
 
@@ -162,9 +173,15 @@ async function runGenericHostTestSuite() {
       resolver,
       keccakFn,
       account: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
-      chainId: SEPOLIA_HEX
+      chainId: SEPOLIA_HEX,
+      mockMode: true
     });
-    await host.loadCartridge('runtime-test-cartridge');
+    await host.loadCartridge('runtime-test-cartridge', {
+      ['0x7777777777777777777777777777777777777777'.toLowerCase()]: {
+        writes: true,
+        allowedSelectors: ['0x12345678']
+      }
+    });
 
     const { port1, port2 } = new MessageChannel();
     host.bindPortRpc(port1);
@@ -275,7 +292,7 @@ async function runGenericHostTestSuite() {
     assert.strictEqual(logs[0].logIndex, '0x0');
     assert.strictEqual(logs[0].removed, false);
 
-    // 2. Chain mismatch fails closed (4901)
+    // 2. Chain mismatch fails closed (4003 policyViolation)
     let caughtChainMismatch = null;
     try {
       await bridge._sendRequest('evm.logs', { chainId: MAINNET_HEX, address: '0xF75323518df7Ce90637e2b93cFd7f7d0627cc205' });
@@ -283,7 +300,7 @@ async function runGenericHostTestSuite() {
       caughtChainMismatch = e;
     }
     assert.ok(caughtChainMismatch, 'Chain mismatch must fail closed');
-    assert.strictEqual(caughtChainMismatch.code, 4901);
+    assert.strictEqual(caughtChainMismatch.code, 4003);
 
     // 3. Malformed filter fails closed (-32602)
     let caughtBadFilter = null;
@@ -305,11 +322,17 @@ async function runGenericHostTestSuite() {
       resolver,
       keccakFn,
       account: '0x70997970C51812dc3A010C7d01b50e0d17dc79C8',
-      chainId: SEPOLIA_HEX
+      chainId: SEPOLIA_HEX,
+      mockMode: true
     });
 
-    // 1. Boot Cartridge #0001 (HoodQuest)
-    const hqBoot = await host.loadCartridge('hoodquest');
+    // 1. Boot Cartridge #0001 (HoodQuest) with explicit write grant for Outlaws contract
+    const hqBoot = await host.loadCartridge('hoodquest', {
+      ['0xF75323518df7Ce90637e2b93cFd7f7d0627cc205'.toLowerCase()]: {
+        writes: true,
+        allowedSelectors: ['0xf59dfdfb']
+      }
+    });
     assert.strictEqual(hqBoot.id, 'hoodquest');
     assert.strictEqual(hqBoot.name, 'HoodQuest: Sanctuary of the Falcon');
     assert.strictEqual(hqBoot.verified, true);
@@ -332,7 +355,12 @@ async function runGenericHostTestSuite() {
     hqPort2.close();
 
     // 2. Switch Host to Cartridge #0002 (Runtime Test Cartridge) without restart
-    const testCartBoot = await host.loadCartridge('runtime-test-cartridge');
+    const testCartBoot = await host.loadCartridge('runtime-test-cartridge', {
+      ['0x7777777777777777777777777777777777777777'.toLowerCase()]: {
+        writes: true,
+        allowedSelectors: ['0x12345678']
+      }
+    });
     assert.strictEqual(testCartBoot.id, 'runtime-test-cartridge');
     assert.strictEqual(testCartBoot.name, 'Runtime Test Cartridge');
     assert.strictEqual(testCartBoot.verified, true);

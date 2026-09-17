@@ -43,6 +43,9 @@ contract CartridgeRegistry {
     /// @notice Whether a channel has been explicitly assigned: cartridgeId => channelKey => isConfigured
     mapping(bytes32 => mapping(bytes32 => bool)) public channelConfigured;
 
+    /// @notice Tracks published semantic version labels per cartridge: cartridgeId => keccak256(bytes(version)) => bool
+    mapping(bytes32 => mapping(bytes32 => bool)) public isVersionPublished;
+
     // Events
     event CartridgeRegistered(bytes32 indexed cartridgeId, address indexed initialPublisher, bytes32 salt, string name);
     event ReleasePublished(
@@ -64,6 +67,7 @@ contract CartridgeRegistry {
     error InvalidOwner();
     error InvalidManifestDigest();
     error InvalidVersion();
+    error VersionAlreadyPublished(bytes32 cartridgeId, string version);
     error ReleaseNotFound(bytes32 cartridgeId, uint256 releaseIndex);
     error ChannelNotSet(bytes32 cartridgeId, bytes32 channelKey);
 
@@ -107,6 +111,12 @@ contract CartridgeRegistry {
 
     /**
      * @notice Publishes an immutable release for a cartridge.
+     * @dev Boundary Architecture Decision:
+     *      The registry records an immutable publisher commitment to a manifestDigest.
+     *      It is deliberately storage-backend-agnostic; it does not verify immediate
+     *      content retrievability at publish time. Content availability is verified
+     *      at resolution time by the host resolver.
+     *      Semantic version labels are immutable: duplicate versions for the same cartridge are rejected.
      * @param cartridgeId The ID of the cartridge.
      * @param version Semantic version string (e.g. "1.0.0").
      * @param manifestDigest The keccak256 digest of the canonical manifest stored in ContentStore.
@@ -119,6 +129,12 @@ contract CartridgeRegistry {
     ) external onlyOwner(cartridgeId) returns (uint256 releaseIndex) {
         if (manifestDigest == bytes32(0)) revert InvalidManifestDigest();
         if (bytes(version).length == 0) revert InvalidVersion();
+
+        bytes32 vHash = keccak256(bytes(version));
+        if (isVersionPublished[cartridgeId][vHash]) {
+            revert VersionAlreadyPublished(cartridgeId, version);
+        }
+        isVersionPublished[cartridgeId][vHash] = true;
 
         releaseIndex = _releases[cartridgeId].length;
 
@@ -241,5 +257,12 @@ contract CartridgeRegistry {
 
         releaseIndex = channelReleaseIndex[cartridgeId][channelKey];
         release = _releases[cartridgeId][releaseIndex];
+    }
+
+    /**
+     * @notice Checks whether a semantic version label has already been published for a cartridge.
+     */
+    function hasVersion(bytes32 cartridgeId, string calldata version) external view returns (bool) {
+        return isVersionPublished[cartridgeId][keccak256(bytes(version))];
     }
 }
